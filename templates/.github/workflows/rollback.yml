@@ -34,7 +34,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'local' }}
   SERVICES: ${{ vars.SERVICES }}
+  SSH_HOST: ${{ vars.SSH_HOST }}
+  SSH_USER: ${{ vars.SSH_USER }}
+  SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+  SSH_KNOWN_HOSTS: ${{ vars.SSH_KNOWN_HOSTS }}
 
 jobs:
   rollback:
@@ -48,6 +53,8 @@ jobs:
 
       - name: Onceki klasorden geri al / roll back from previous folder
         if: inputs.mode == 'previous_folder'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh rollback
 
       - name: Belirli commit - build + test / specific commit - build + test
@@ -58,6 +65,7 @@ jobs:
         if: inputs.mode == 'specific_commit'
         env:
           APP_ENV: ${{ secrets.APP_ENV }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           if [ -z "${{ inputs.commit_sha }}" ]; then
             echo "commit_sha zorunlu / required"
@@ -69,6 +77,8 @@ jobs:
           bash scripts/pipeline.sh restart
 
       - name: Saglik kontrolu / health check
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh health
 
       - name: Rollback ozeti / summary

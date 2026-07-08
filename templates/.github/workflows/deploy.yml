@@ -7,10 +7,15 @@ name: Deploy
 # BU DOSYAYI DUZENLEMENIZE GEREK YOK. Tum proje bilgileri repo Variables/Secrets'tan okunur.
 # NO NEED TO EDIT THIS FILE. All project values are read from repo Variables/Secrets.
 #   Settings > Secrets and variables > Actions
-#   - Variable  SERVICES      : name|csproj|deploy_dir|service_name|health_url (her satir bir servis)
-#   - Variable  RUNNER_LABEL  : runner etiketiniz (varsayilan / default: self-hosted)
-#   - Variable  ARTIFACT_NAME : (opsiyonel / optional, varsayilan: app-publish)
-#   - Secret    APP_ENV       : (opsiyonel) KEY=VALUE satirlari; servise .env olarak enjekte edilir
+#   - Variable  DEPLOY_TARGET  : local (varsayilan) veya remote
+#   - Variable  SERVICES       : name|csproj|deploy_dir|service_name|health_url
+#   - Variable  RUNNER_LABEL   : runner etiketi (remote icin ubuntu-latest onerilir)
+#   - Variable  SSH_HOST       : uzak sunucu IP/hostname (remote)
+#   - Variable  SSH_USER       : SSH kullanicisi (remote)
+#   - Variable  SSH_PORT       : SSH portu (varsayilan 22, remote)
+#   - Variable  SSH_KNOWN_HOSTS : (opsiyonel) sunucu host key satiri
+#   - Secret    SSH_PRIVATE_KEY : deploy SSH private key (remote, sifresiz)
+#   - Secret    APP_ENV        : (opsiyonel) KEY=VALUE satirlari
 
 on:
   workflow_dispatch:
@@ -35,8 +40,13 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'local' }}
   SERVICES: ${{ vars.SERVICES }}
   ARTIFACT_NAME: ${{ vars.ARTIFACT_NAME || 'app-publish' }}
+  SSH_HOST: ${{ vars.SSH_HOST }}
+  SSH_USER: ${{ vars.SSH_USER }}
+  SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+  SSH_KNOWN_HOSTS: ${{ vars.SSH_KNOWN_HOSTS }}
 
 jobs:
   deploy:
@@ -47,11 +57,29 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Yapilandirmayi dogrula / validate configuration
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           if [ -z "${SERVICES// /}" ]; then
             echo "HATA / ERROR: 'SERVICES' repo degiskeni tanimli degil."
-            echo "Settings > Secrets and variables > Actions > Variables > New variable > SERVICES"
             exit 1
+          fi
+          if [ "$DEPLOY_TARGET" = "remote" ]; then
+            missing=0
+            for v in SSH_HOST SSH_USER; do
+              if [ -z "${!v:-}" ]; then
+                echo "HATA / ERROR: remote deploy icin '$v' variable gerekli."
+                missing=1
+              fi
+            done
+            if [ -z "${SSH_PRIVATE_KEY:-}" ]; then
+              echo "HATA / ERROR: remote deploy icin 'SSH_PRIVATE_KEY' secret gerekli."
+              missing=1
+            fi
+            if [ "$missing" -ne 0 ]; then exit 1; fi
+            echo "Deploy modu / mode: remote -> ${SSH_USER}@${SSH_HOST}:${SSH_PORT}"
+          else
+            echo "Deploy modu / mode: local (runner = hedef host)"
           fi
 
       - name: Deploy ozeti / summary
@@ -59,9 +87,13 @@ jobs:
           {
             echo "## Deploy"
             echo "- Yapan / by: **${{ github.actor }}**"
+            echo "- Mod / mode: **${DEPLOY_TARGET}**"
             echo "- Kaynak / source: **${{ inputs.source }}**"
             echo "- Commit: $(git log -1 --pretty=%s)"
             echo "- Not / note: ${{ inputs.description }}"
+            if [ "$DEPLOY_TARGET" = "remote" ]; then
+              echo "- Hedef / target: **${SSH_USER}@${SSH_HOST}:${SSH_PORT}**"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       # DUZENLE / EDIT (opsiyonel): veritabani/altyapi hazirligi
@@ -93,19 +125,26 @@ jobs:
           echo "ARTIFACT_ROOT=$ROOT" >> "$GITHUB_ENV"
 
       - name: Mevcut surumu yedekle / back up current release
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh backup
 
       - name: Yayinla (kaynaktan) / publish (from source)
         if: inputs.source == 'build_from_source'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh publish-source
 
       - name: Yayinla (artifact) / publish (artifact)
         if: inputs.source == 'ci_artifact'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh deploy-artifacts
 
       - name: Gizli ortami yaz / write secret environment
         env:
           APP_ENV: ${{ secrets.APP_ENV }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh write-env
 
       - name: Deploy bilgisini yaz / write deploy info
@@ -113,18 +152,25 @@ jobs:
           GIT_SHA: ${{ github.sha }}
           DEPLOYED_BY: ${{ github.actor }}
           DEPLOY_NOTE: ${{ inputs.description }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh write-info
 
       - name: Servisleri yeniden baslat / restart services
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh restart
 
       - name: Saglik kontrolu / health check
         id: health
         continue-on-error: true
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh health
 
       - name: Basarisizsa otomatik geri al / auto-rollback on failure
         if: steps.health.outcome == 'failure'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           bash scripts/pipeline.sh rollback
           bash scripts/pipeline.sh health || true

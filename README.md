@@ -20,6 +20,7 @@
 - [8. Denetlenebilirlik / Auditability](#8-denetlenebilirlik--auditability)
 - [9. Eşzamanlılık Koruması / Concurrency Guard](#9-eşzamanlılık-koruması--concurrency-guard)
 - [Kod yazmazsınız — sadece bilgi girersiniz / No code — you only fill in values](#kod-yazmazsınız--sadece-bilgi-girirsiniz--no-code--you-only-fill-in-values)
+- [Uzak sunucu deploy (SSH) / Remote server deploy (SSH)](#uzak-sunucu-deploy-ssh--remote-server-deploy-ssh)
 - [Kurulum checklist / Setup checklist](#kurulum-checklist--setup-checklist)
 - [Uçtan uca senaryolar / End-to-end scenarios](#uçtan-uca-senaryolar--end-to-end-scenarios)
 - [Hızlı başlangıç / Quick start](#hızlı-başlangıç--quick-start)
@@ -241,10 +242,16 @@ note=ana sayfa metni güncellendi
 
 | Tür / Type | Ad / Name | Zorunlu / Required | İçerik / Content |
 |---|---|---|---|
+| Variable | `DEPLOY_TARGET` | Hayır / No | `local` (varsayılan) veya **`remote`** (uzak sunucu) |
 | Variable | `SERVICES` | Evet / Yes | Servis listesi (aşağıya bakın) / service list (see below) |
-| Variable | `RUNNER_LABEL` | Hayır / No | Runner etiketi (varsayılan / default: `self-hosted`) |
-| Variable | `ARTIFACT_NAME` | Hayır / No | Artifact adı (varsayılan / default: `app-publish`) |
-| Secret | `APP_ENV` | Hayır / No | `KEY=VALUE` satırları: bağlantı dizeleri, API anahtarları / connection strings, API keys |
+| Variable | `RUNNER_LABEL` | Hayır / No | `ubuntu-latest` (remote önerilir) veya `self-hosted` |
+| Variable | `SSH_HOST` | remote için / for remote | Uzak sunucu IP veya hostname / remote server IP or hostname |
+| Variable | `SSH_USER` | remote için / for remote | SSH kullanıcısı (ör. `deploy`) / SSH user (e.g. `deploy`) |
+| Variable | `SSH_PORT` | Hayır / No | SSH portu (varsayılan `22`) / SSH port (default `22`) |
+| Variable | `SSH_KNOWN_HOSTS` | Hayır / No | Sunucu host key satırı (boşsa otomatik `ssh-keyscan`) |
+| Variable | `ARTIFACT_NAME` | Hayır / No | Artifact adı (varsayılan `app-publish`) |
+| Secret | `SSH_PRIVATE_KEY` | remote için / for remote | Deploy SSH **private key** (şifresiz bağlantı) |
+| Secret | `APP_ENV` | Hayır / No | `KEY=VALUE`: bağlantı dizeleri, API anahtarları |
 
 ### `SERVICES` değişkeni / variable
 
@@ -283,6 +290,88 @@ SomeApi__ApiKey=sk-...
 
 ---
 
+## Uzak sunucu deploy (SSH) / Remote server deploy (SSH)
+
+**TR:** Üretim sunucuları uzaktaysa (runner'ın yanında değilse) `DEPLOY_TARGET=remote` kullanın. GitHub Actions runner'da derleme yapılır; deploy **SSH key ile şifresiz** uzak sunucuya `rsync` + `systemctl` ile yapılır. Her deploy'da şifre girilmez — private key GitHub **Secret**'ında saklanır.
+
+**EN:** When production servers are remote (not co-located with the runner), use `DEPLOY_TARGET=remote`. Build runs on the GitHub Actions runner; deploy reaches the remote server **passwordlessly via SSH key** using `rsync` + `systemctl`. No password is entered per deploy — the private key is stored as a GitHub **Secret**.
+
+```mermaid
+flowchart LR
+    GH["GitHub Actions runner<br/>(ubuntu-latest)"] -->|SSH key| SV["Uzak Linux sunucu<br/>Remote Linux server"]
+    SV --> SVC["/opt/... + systemd"]
+```
+
+### 1. Deploy SSH key oluştur / Create deploy SSH key
+
+**TR** (bir kez, güvenli makinede):
+
+```bash
+ssh-keygen -t ed25519 -f deploy_key -N "" -C "cicd-deploy"
+```
+
+- `deploy_key` → **private** → GitHub Secret: `SSH_PRIVATE_KEY` (tüm içeriği kopyala)
+- `deploy_key.pub` → **public** → uzak sunucuya ekle:
+
+```bash
+ssh-copy-id -i deploy_key.pub -p 22 deploy@10.0.0.5
+# veya sunucuda: echo "..." >> ~/.ssh/authorized_keys
+```
+
+**EN:** Generate once on a secure machine; put the private key in `SSH_PRIVATE_KEY`, public key in the server's `authorized_keys`.
+
+### 2. GitHub Variables / Secrets (remote)
+
+| Ad / Name | Örnek / Example |
+|---|---|
+| `DEPLOY_TARGET` | `remote` |
+| `SSH_HOST` | `10.0.0.5` |
+| `SSH_USER` | `deploy` |
+| `SSH_PORT` | `22` |
+| `RUNNER_LABEL` | `ubuntu-latest` |
+| `SSH_PRIVATE_KEY` (Secret) | `deploy_key` dosyasının içeriği |
+
+**TR:** `SERVICES` içindeki `health_url`, runner'ın erişebildiği adres olmalı (ör. `http://10.0.0.5:5001` — `127.0.0.1` değil).
+
+**EN:** In `SERVICES`, `health_url` must be reachable from the runner (e.g. `http://10.0.0.5:5001` — not `127.0.0.1`).
+
+### 3. Uzak sunucuda tek seferlik kurulum / One-time remote host setup
+
+**TR:** systemd birimlerini uzak sunucuda oluşturmak için (SSH ile):
+
+```bash
+DEPLOY_TARGET=remote \
+SSH_HOST=10.0.0.5 SSH_USER=deploy SSH_PORT=22 \
+SSH_PRIVATE_KEY="$(cat deploy_key)" \
+SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://10.0.0.5:5001" \
+bash scripts/setup-remote-host.sh
+```
+
+**EN:** Creates systemd units on the remote server over SSH.
+
+### 4. Uzak kullanıcı yetkileri / Remote user permissions
+
+**TR:** Deploy kullanıcısının `sudo` ile `systemctl restart`, `mkdir`, `cp`, `rm` çalıştırabilmesi gerekir (şifresiz önerilir):
+
+```
+deploy ALL=(ALL) NOPASSWD: /bin/systemctl, /bin/mkdir, /bin/cp, /bin/rm, /usr/bin/pkill
+```
+
+`/opt/...` dizinlerine yazma yetkisi de verilmelidir.
+
+**EN:** The deploy user needs passwordless `sudo` for `systemctl`, file ops under `/opt/...`.
+
+### Local vs Remote
+
+| | `local` | `remote` |
+|---|---|---|
+| Runner konumu | Uygulama ile aynı makine | Herhangi (ör. `ubuntu-latest`) |
+| Sunucuya SSH | Gerekmez | **SSH key gerekir** |
+| `health_url` | `http://127.0.0.1:port` | `http://<sunucu-ip>:port` |
+| Kurulum | `setup-host.sh` (yerel) | `setup-remote-host.sh` (SSH) |
+
+---
+
 ## Kurulum checklist / Setup checklist
 
 **TR:** Aşağıdaki tablo, projeyi kullanıma hazır hâle getirmek için **neyi nerede değiştireceğinizi** özetler. Workflow veya script dosyalarını düzenlemeniz gerekmez.
@@ -295,36 +384,57 @@ SomeApi__ApiKey=sk-...
 |---|---|---|---|
 | GitHub repo → **Use this template** | Yeni repo oluşturma / create your copy | Evet / Yes | 1 kez / once |
 | Repo kökü | `templates/.github` → `.github`, `templates/scripts` → `scripts` kopyala / copy | Evet / Yes | 1 kez / once |
-| **Settings → Secrets and variables → Actions → Variables** → `SERVICES` | Proje yolu, deploy dizini, servis adı, port/IP (`health_url`) / project path, deploy dir, service name, port/IP | Evet / Yes | Proje başına / per project |
-| Aynı yer → `RUNNER_LABEL` | Runner etiketi (çoğu zaman `self-hosted`) / runner label | Hayır / No | Gerekirse / if needed |
-| Aynı yer → `ARTIFACT_NAME` | Artifact adı (varsayılan `app-publish`) / artifact name | Hayır / No | Gerekirse / if needed |
-| **Settings → Secrets and variables → Actions → Secrets** → `APP_ENV` | DB bağlantı dizeleri, API anahtarları, IP'li gizli ayarlar / connection strings, API keys | Hayır / No | Gerekirse / if needed |
-| **Settings → Environments** → `production` | Onaylayan kişi (**required reviewers**) / approver | Evet / Yes | 1 kez / once |
-| Host (Linux/WSL) | `sudo SERVICES="..." bash scripts/setup-host.sh` (GitHub'daki `SERVICES` ile **aynı**) / same as GitHub `SERVICES` | Evet / Yes | 1 kez / once |
+| **Settings → Variables** → `DEPLOY_TARGET` | `remote` (uzak sunucu) veya `local` | remote için / for remote | 1 kez |
+| **Settings → Variables** → `SSH_HOST`, `SSH_USER` | Uzak sunucu IP ve kullanıcı / remote IP and user | remote için | 1 kez |
+| **Settings → Secrets** → `SSH_PRIVATE_KEY` | Deploy SSH private key | remote için | 1 kez |
+| **Settings → Variables** → `SERVICES` | Proje yolu, deploy dizini, **health_url = sunucu IP** | Evet / Yes | Proje başına |
+| Aynı yer → `RUNNER_LABEL` | `ubuntu-latest` (remote) veya `self-hosted` (local) | Hayır / No | Gerekirse |
+| **Settings → Secrets** → `APP_ENV` | DB / API gizli ayarlar | Hayır / No | Gerekirse |
+| **Settings → Environments** → `production` | Onaylayan kişi | Evet / Yes | 1 kez |
+| Uzak sunucu (remote) | `bash scripts/setup-remote-host.sh` (SSH ile systemd) | remote için | 1 kez |
+| Yerel host (local) | `sudo bash scripts/setup-host.sh` | local için | 1 kez |
 
 ### Kullanıma hazır olma sırası / Ready-to-use sequence
 
-**TR**
+**TR (uzak sunucu / remote — önerilen / recommended)**
+
+1. **Use this template** → yeni repo
+2. `templates/` içeriğini repo köküne taşı
+3. Deploy SSH key oluştur → public key sunucuya, private key → Secret `SSH_PRIVATE_KEY`
+4. Variables: `DEPLOY_TARGET=remote`, `SSH_HOST`, `SSH_USER`, `SERVICES` (health_url = sunucu IP)
+5. `RUNNER_LABEL=ubuntu-latest`, `production` + reviewer
+6. `bash scripts/setup-remote-host.sh` (bir kez)
+7. Push → CI → Deploy + onay
+
+**EN (remote — recommended)**
+
+1. **Use this template** → new repo
+2. Move `templates/` to repo root
+3. Create deploy SSH key → public on server, private in `SSH_PRIVATE_KEY`
+4. Variables: `DEPLOY_TARGET=remote`, `SSH_HOST`, `SSH_USER`, `SERVICES` (health_url = server IP)
+5. `RUNNER_LABEL=ubuntu-latest`, `production` + reviewer
+6. `bash scripts/setup-remote-host.sh` (once)
+7. Push → CI → Deploy + approve
+
+**TR (yerel / local — runner = sunucu)**
 
 1. [github.com/Dedmoo/cicd-blueprint](https://github.com/Dedmoo/cicd-blueprint) → **Use this template** → yeni repo oluştur
-2. `templates/.github` ve `templates/scripts` klasörlerini repo **köküne** taşı (sadece `templates/` içinde bırakma — CI çalışmaz)
-3. **Settings → Secrets and variables → Actions → Variables** → `SERVICES` ekle (kendi proje yolların, portların, `/opt/...` dizinlerin)
-4. (Opsiyonel) **Secrets** → `APP_ENV`: bağlantı dizeleri / API anahtarları
+2. `templates/.github` ve `templates/scripts` klasörlerini repo **köküne** taşı
+3. Variables: `DEPLOY_TARGET=local` (veya boş), `SERVICES`, `RUNNER_LABEL=self-hosted`
+4. (Opsiyonel) Secret `APP_ENV`
 5. **Settings → Environments** → `production` + **required reviewers**
-6. Runner makinesinde bir kez: `sudo SERVICES="..." bash scripts/setup-host.sh`
-7. `main`'e push → CI yeşil olmalı
-8. **Actions → Deploy** → açıklama gir → onay ver → canlı
+6. Runner makinesinde: `sudo SERVICES="..." bash scripts/setup-host.sh`
+7. `main`'e push → CI → Deploy
 
-**EN**
+**EN (local — runner on same machine)**
 
-1. [github.com/Dedmoo/cicd-blueprint](https://github.com/Dedmoo/cicd-blueprint) → **Use this template** → create a new repository
-2. Move `templates/.github` and `templates/scripts` to the repository **root** (do not leave them only under `templates/` — CI will not run)
-3. **Settings → Secrets and variables → Actions → Variables** → add `SERVICES` (your project paths, ports, `/opt/...` dirs)
-4. (Optional) **Secrets** → `APP_ENV`: connection strings / API keys
+1. **Use this template** → new repo
+2. Move `templates/.github` and `templates/scripts` to repo root
+3. Variables: `DEPLOY_TARGET=local` (or empty), `SERVICES`, `RUNNER_LABEL=self-hosted`
+4. (Optional) Secret `APP_ENV`
 5. **Settings → Environments** → `production` + **required reviewers**
-6. Once on the runner machine: `sudo SERVICES="..." bash scripts/setup-host.sh`
-7. Push to `main` → CI must be green
-8. **Actions → Deploy** → enter description → approve → live
+6. On runner machine: `sudo SERVICES="..." bash scripts/setup-host.sh`
+7. Push to `main` → CI → Deploy
 
 ### Düzenlenmeyen dosyalar / Files you do not edit
 
@@ -400,9 +510,11 @@ cicd-blueprint/
     │       ├── deploy.yml                      # elle, onaylı, health + otomatik rollback
     │       └── rollback.yml                    # previous_folder | specific_commit
     └── scripts/
-        ├── pipeline.sh            # backup/publish/deploy/write-env/write-info/restart/health/rollback
-        ├── verify-health.sh       # /health -> / fallback
-        └── setup-host.sh          # SERVICES'ten systemd birimleri üretir (+ .env EnvironmentFile)
+        ├── pipeline.sh            # local + remote deploy/rollback
+        ├── ssh-remote.sh          # SSH key, rsync, remote commands
+        ├── setup-remote-host.sh   # uzak sunucuda systemd kurulumu (SSH)
+        ├── verify-health.sh
+        └── setup-host.sh          # yerel systemd kurulumu
 ```
 
 ---
