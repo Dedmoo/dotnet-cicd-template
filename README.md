@@ -4,6 +4,9 @@
 
 **EN:** A project-agnostic, copy-paste CI/CD pipeline template. On a self-hosted GitHub Actions runner it provides automatic build/test, approval-gated production deployment, health checks and automatic rollback on failure. It adapts to any .NET project in minutes by filling in a single `SERVICES` block.
 
+**TR — İlk kez mi kuruyorsunuz?** Öğrenmeye gerek yok: [`docs/beginner-walkthrough.tr.md`](./docs/beginner-walkthrough.tr.md)  
+**EN — First time setup?** No theory needed: [`docs/beginner-walkthrough.en.md`](./docs/beginner-walkthrough.en.md)
+
 ---
 
 ## İçindekiler / Table of Contents
@@ -552,6 +555,10 @@ ssh-keyscan -p 22 10.0.0.5
 dotnet-cicd-template/
 ├── README.md
 ├── docs/
+│   ├── beginner-walkthrough.tr.md  # hiç bilmeyenler (TR)
+│   ├── beginner-walkthrough.en.md  # complete beginners (EN)
+│   ├── company-setup.tr.md         # firma kurulum referansı (TR)
+│   ├── company-setup.en.md         # company setup reference (EN)
 │   ├── dotnet-cicd-template.tr.md  # Türkçe playbook
 │   └── dotnet-cicd-template.en.md  # English playbook
 └── templates/
@@ -574,8 +581,16 @@ dotnet-cicd-template/
 
 ## Dokümantasyon / Documentation
 
-**TR:** Firmaya özel ayarlar (Variables/Secrets/Environments) için tek başvuru noktası:
-**EN:** Single reference for company-specific settings (Variables/Secrets/Environments):
+**TR:** Hiç bilmeyen / ilk kez kuran için (öğrenme yok — tıklaya tıklaya):
+**EN:** Complete beginners / first-time setup (no theory — click by click):
+
+| Dil / Language | Belge / Document |
+|---|---|
+| Türkçe | [`docs/beginner-walkthrough.tr.md`](./docs/beginner-walkthrough.tr.md) |
+| English | [`docs/beginner-walkthrough.en.md`](./docs/beginner-walkthrough.en.md) |
+
+**TR:** Firmaya özel ayarlar (Variables/Secrets/Environments) — tablo referansı:
+**EN:** Company-specific settings (Variables/Secrets/Environments) — table reference:
 
 | Dil / Language | Belge / Document |
 |---|---|

@@ -1,6 +1,9 @@
 # Company Setup Guide — dotnet-cicd-template
 
-This guide is for someone who has never seen the project. You do not edit YML files. All configuration is done in the GitHub UI (Variables / Secrets / Environments) plus a one-time host setup.
+This file is the **reference guide** (tables, what each variable means).  
+If you have never touched CI/CD, start with the click-by-click walkthrough: [`beginner-walkthrough.en.md`](./beginner-walkthrough.en.md)
+
+You do not edit YML files. All configuration is done in the GitHub UI (Variables / Secrets / Environments) plus a one-time host setup.
 
 Turkish version: [`company-setup.tr.md`](./company-setup.tr.md)
 

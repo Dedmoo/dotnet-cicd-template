@@ -1,6 +1,9 @@
 # Firma Kurulum Rehberi — dotnet-cicd-template
 
-Bu rehber, projeyi hiç bilmeyen biri için yazılmıştır. YML dosyasına dokunmazsınız. Tüm ayarlar GitHub arayüzünden (Variables / Secrets / Environments) ve sunucuda bir kez yapılan kurulumdan gelir.
+Bu dosya **referans rehberdir** (tablolar, hangi değişken ne).  
+CI/CD’ye hiç dokunmamış biriyseniz önce tıklaya tıklaya giden şu dosyayı kullanın: [`beginner-walkthrough.tr.md`](./beginner-walkthrough.tr.md)
+
+YML dosyasına dokunmazsınız. Tüm ayarlar GitHub arayüzünden (Variables / Secrets / Environments) ve sunucuda bir kez yapılan kurulumdan gelir.
 
 İngilizce sürüm: [`company-setup.en.md`](./company-setup.en.md)
 
