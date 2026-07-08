@@ -45,6 +45,53 @@ field() {
   printf '%s' "$1" | cut -d'|' -f"$2" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
+# Alan dogrulamasi / field validation
+# deploy_dir Unix yolu: sadece harf, rakam, /, _, ., @, - karakterlerine izin verilir.
+# service_name sistemd birimi: sadece harf, rakam, _, ., @, - karakterlerine izin verilir.
+# Bu kurallar gecerli her yol/birim adini kapsar; komut enjeksiyonunu onler.
+# deploy_dir Unix path: only letters, digits, /, _, ., @, - are allowed.
+# service_name systemd unit: only letters, digits, _, ., @, - are allowed.
+# These rules cover every valid path/unit name while preventing command injection.
+validate_path_field() {
+  local val="$1" label="$2"
+  if [ -z "$val" ]; then
+    echo "HATA / ERROR: SERVICES alani '$label' bos olamaz / must not be empty"
+    exit 1
+  fi
+  if ! printf '%s' "$val" | grep -qE '^[a-zA-Z0-9/_.@-]+$'; then
+    echo "HATA / ERROR: SERVICES alani '$label' gecersiz karakter iceriyor / contains invalid character: '$val'"
+    echo "  Yalnizca izin verilenler / only allowed: harf, rakam, /, _, ., @, -"
+    exit 1
+  fi
+}
+
+validate_name_field() {
+  local val="$1" label="$2"
+  if [ -z "$val" ]; then
+    echo "HATA / ERROR: SERVICES alani '$label' bos olamaz / must not be empty"
+    exit 1
+  fi
+  if ! printf '%s' "$val" | grep -qE '^[a-zA-Z0-9_.@-]+$'; then
+    echo "HATA / ERROR: SERVICES alani '$label' gecersiz karakter iceriyor / contains invalid character: '$val'"
+    echo "  Yalnizca izin verilenler / only allowed: harf, rakam, _, ., @, -"
+    exit 1
+  fi
+}
+
+# SERVICES satirlarindaki tum alanlari baslamadan once dogrula.
+# Validates all SERVICES fields before any command runs.
+validate_services() {
+  while IFS= read -r line <&3; do
+    local name dd svc
+    name="$(field "$line" 1)"
+    dd="$(field   "$line" 3)"
+    svc="$(field  "$line" 4)"
+    validate_name_field "$name" "name (alan 1)"
+    validate_path_field "$dd"   "deploy_dir (alan 3)"
+    validate_name_field "$svc"  "service_name (alan 4)"
+  done 3< <(services_lines)
+}
+
 target_dir_exists() {
   local dd="$1"
   if is_remote; then
@@ -84,7 +131,10 @@ target_write_env_one() {
   local content="$2"
   if is_remote; then
     remote_sudo "mkdir -p '$dd'"
-    local tmp="/tmp/cicd-env-$$"
+    # mktemp ile rassal gecici yol; PID-tabanli /tmp/cicd-env-$$ yerine kullanilir (TMP-01).
+    # Use mktemp for an unpredictable temp path instead of PID-based /tmp/cicd-env-$$ (TMP-01).
+    local tmp
+    tmp="$(remote_ssh "mktemp /tmp/cicd-env-XXXXXX")"
     remote_write_file "$content" "$tmp" 600
     remote_sudo "mv '$tmp' '${dd}/.env' && chmod 600 '${dd}/.env' && chown '${SSH_USER}:${SSH_USER}' '${dd}/.env'"
   else
@@ -245,6 +295,15 @@ cmd_rollback() {
 main() {
   local command="${1:-}"
   case "$command" in
+    backup|publish-source|deploy-artifacts|write-env|write-info|restart|health|rollback)
+      validate_services
+      ;;
+    *)
+      echo "kullanim / usage: DEPLOY_TARGET=local|remote SERVICES=... bash pipeline.sh <command>"
+      exit 1
+      ;;
+  esac
+  case "$command" in
     backup)           cmd_backup ;;
     publish-source)   cmd_publish_source ;;
     deploy-artifacts) cmd_deploy_artifacts ;;
@@ -253,10 +312,6 @@ main() {
     restart)          cmd_restart ;;
     health)           cmd_health ;;
     rollback)         cmd_rollback ;;
-    *)
-      echo "kullanim / usage: DEPLOY_TARGET=local|remote SERVICES=... bash pipeline.sh <command>"
-      exit 1
-      ;;
   esac
 }
 

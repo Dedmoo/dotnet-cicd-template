@@ -10,13 +10,13 @@
 
 ## Özet Puan Tablosu
 
-| ID | Başlık | Önem | Dosya |
-|---|---|---|---|
-| INJ-01 | `remote_sudo` komut enjeksiyonu (SERVICES alanları) | **ORTA** | `pipeline.sh` |
-| PIN-01 | Action sürümlerinde SHA yerine etiket kullanımı | **DÜŞÜK-ORTA** | Tüm workflow'lar |
-| FORK-01 | `pull_request` tetikleyicisi + self-hosted runner | **DÜŞÜK** | `continuous-integration.yml` |
-| TMP-01 | Uzak geçici dosya yolu tahmin edilebilir (`/tmp/cicd-env-$$`) | **DÜŞÜK** | `pipeline.sh` |
-| CLEANUP-01 | SSH anahtar dosyası `SIGKILL`'de temizlenmiyor | **BİLGİ** | `ssh-remote.sh` |
+| ID | Başlık | Önem | Dosya | Durum |
+|---|---|---|---|---|
+| INJ-01 | `remote_sudo` komut enjeksiyonu (SERVICES alanları) | **ORTA** | `pipeline.sh` | **GİDERİLDİ** |
+| TMP-01 | Uzak geçici dosya yolu tahmin edilebilir (`/tmp/cicd-env-$$`) | **DÜŞÜK** | `pipeline.sh` | **GİDERİLDİ** |
+| PIN-01 | Action sürümlerinde SHA yerine etiket kullanımı | **DÜŞÜK-ORTA** | Tüm workflow'lar | **GİDERİLDİ** (Dependabot) |
+| FORK-01 | `pull_request` tetikleyicisi + self-hosted runner | **DÜŞÜK** | `continuous-integration.yml` | Açık (private repo kabul edilebilir) |
+| CLEANUP-01 | SSH anahtar dosyası `SIGKILL`'de temizlenmiyor | **BİLGİ** | `ssh-remote.sh` | Açık (standart kısıt) |
 
 Tespit edilen **yüksek önem** bulgusu yoktur.
 
@@ -24,7 +24,7 @@ Tespit edilen **yüksek önem** bulgusu yoktur.
 
 ## Bulgu Detayları
 
-### INJ-01 — `remote_sudo` Komut Enjeksiyonu
+### INJ-01 — `remote_sudo` Komut Enjeksiyonu ✅ GİDERİLDİ
 **Önem:** ORTA  
 **Dosya/Satır:** `pipeline.sh`, `target_backup_one`, `target_publish_dir`, `target_restart_one`, `target_rollback_one`
 
@@ -50,11 +50,11 @@ Bu değer deploy_dir'e `/opt/myapp'` yerleştirerek `remote_sudo` string'ini kı
 - `printf '%q'` SSH kanalını güvenli hale getirir; sorun bash string'inin kendisindedir.
 - Üretim repo'ları genellikle kısıtlı erişimlidir; gerçek dünya riski düşüktür.
 
-**Önerilen düzeltme (onayınızı bekliyor):** `remote_sudo` çağrılarında `$dd` ve `$svc` değerleri `printf '%q'` ile tırnak içine alınmalıdır, veya değerler `ssh ... bash` stdin üzerinden güvenli biçimde geçirilmelidir.
+**Uygulanan düzeltme:** `pipeline.sh`'e `validate_path_field()` ve `validate_name_field()` fonksiyonları eklendi. `validate_services()` her komut çalışmadan önce SERVICES içindeki `deploy_dir` (alan 3) ve `service_name` (alan 4) değerlerini whitelist regex ile doğrular (`^[a-zA-Z0-9/_.@-]+$` / `^[a-zA-Z0-9_.@-]+$`). Geçersiz karakter içeren değer `exit 1` ile hemen reddedilir. Mevcut kullanımları etkilemez; bu karakterlerin dışına çıkan hiçbir geçerli Unix yolu veya systemd birim adı yoktur.
 
 ---
 
-### PIN-01 — Action Sürümlerinde SHA Yerine Etiket
+### PIN-01 — Action Sürümlerinde SHA Yerine Etiket ✅ GİDERİLDİ (Dependabot)
 **Önem:** DÜŞÜK-ORTA  
 **Dosya/Satır:** Tüm workflow'lar
 
@@ -75,7 +75,7 @@ uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 - Self-hosted runner ortamı, GitHub-hosted runner'a göre zaten kontrollüdür.
 - Bu template bir şablon reposudur; kullanıcı reposu bu action'ları kendi workflow'larında çalıştırır — GitHub-hosted runner kullanılıyorsa risk daha anlamlıdır.
 
-**Önerilen düzeltme (onayınızı bekliyor):** Action etiketlerini tam SHA ile değiştirin veya `Dependabot` / `Renovate` ile otomatik güncelleme + SHA pin'leme ekleyin.
+**Uygulanan düzeltme:** `templates/.github/dependabot.yml` eklendi (package-ecosystem: github-actions, haftalık tarama). Template'ten türetilen her repo otomatik olarak Dependabot PR'ları alır; action güncellemeleri gözden geçirilip merge edilebilir. Mevcut hiçbir kodu değiştirmez; sadece yeni bir config dosyası ekler.
 
 ---
 
@@ -100,9 +100,9 @@ on:
 
 ---
 
-### TMP-01 — Uzak Geçici Dosya Yolu (`/tmp/cicd-env-$$`)
+### TMP-01 — Uzak Geçici Dosya Yolu (`/tmp/cicd-env-$$`) ✅ GİDERİLDİ
 **Önem:** DÜŞÜK  
-**Dosya/Satır:** `pipeline.sh` – `target_write_env_one`, satır ~87
+**Dosya/Satır:** `pipeline.sh` – `target_write_env_one`
 
 **Kanıt:**
 ```bash
@@ -118,7 +118,7 @@ remote_sudo "mv '$tmp' '${dd}/.env' && chmod 600 '${dd}/.env' && ..."
 - Deploy kullanıcısı dışında bir hesap bu sunucuda bulunuyor olmalıdır.
 - Güvenli sunucu ortamlarında pratikte ihmal edilebilir.
 
-**Önerilen düzeltme (opsiyonel, onayınızı bekliyor):** Uzak tarafta da `mktemp` kullanılabilir: `remote_ssh "mktemp"` ile geçici yol alınır, ardından rsync uygulanır.
+**Uygulanan düzeltme:** `tmp="$(remote_ssh "mktemp /tmp/cicd-env-XXXXXX")"` ile rassal suffix üretilir. `mktemp` tüm modern Linux dağıtımlarında vardır; işleyiş değişmez.
 
 ---
 
