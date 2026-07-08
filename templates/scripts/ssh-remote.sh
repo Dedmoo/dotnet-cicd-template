@@ -44,12 +44,32 @@ ssh_remote_init() {
   mkdir -p "${HOME}/.ssh"
   chmod 700 "${HOME}/.ssh"
 
-  if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
-    printf '%s\n' "$SSH_KNOWN_HOSTS" >> "${HOME}/.ssh/known_hosts"
-  else
-    ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> "${HOME}/.ssh/known_hosts" 2>/dev/null || true
+  local known_hosts="${HOME}/.ssh/known_hosts"
+  # Port != 22 ise known_hosts anahtari [host]:port bicimindedir.
+  # When port != 22, known_hosts keys use the [host]:port form.
+  local hostspec="$SSH_HOST"
+  if [ "$SSH_PORT" != "22" ]; then
+    hostspec="[${SSH_HOST}]:${SSH_PORT}"
   fi
-  chmod 600 "${HOME}/.ssh/known_hosts" 2>/dev/null || true
+
+  if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
+    # Her pipeline adiminda yeniden yazma; host zaten biliniyorsa atla.
+    # Do not re-append on every pipeline step; skip if the host is already known.
+    if ! ssh-keygen -F "$hostspec" -f "$known_hosts" >/dev/null 2>&1; then
+      printf '%s\n' "$SSH_KNOWN_HOSTS" >> "$known_hosts"
+    fi
+  else
+    # Host anahtari zaten biliniyorsa tekrar taramayiz. Boylece her pipeline adiminin
+    # ayri ayri ssh-keyscan (kimlik dogrulamasiz baglanti) acmasi ve modern sshd'nin
+    # PerSourcePenalties (noauth) korumasini tetiklemesi engellenir.
+    # Skip re-scanning when the host key is already known. This avoids one no-auth
+    # ssh-keyscan connection per pipeline step, which can trip a modern sshd's
+    # PerSourcePenalties (noauth) protection and cause "connection reset" errors.
+    if ! ssh-keygen -F "$hostspec" -f "$known_hosts" >/dev/null 2>&1; then
+      ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> "$known_hosts" 2>/dev/null || true
+    fi
+  fi
+  chmod 600 "$known_hosts" 2>/dev/null || true
 
   export SSH_TARGET="${SSH_USER}@${SSH_HOST}"
   export SSH_CMD=(ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15)

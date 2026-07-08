@@ -13,7 +13,7 @@ name: Deploy
 #   - Variable  SSH_HOST       : uzak sunucu IP/hostname (remote)
 #   - Variable  SSH_USER       : SSH kullanicisi (remote)
 #   - Variable  SSH_PORT       : SSH portu (varsayilan 22, remote)
-#   - Variable  SSH_KNOWN_HOSTS : (opsiyonel) sunucu host key satiri
+#   - Variable  SSH_KNOWN_HOSTS : (onerilir / recommended) sunucu host key satiri
 #   - Secret    SSH_PRIVATE_KEY : deploy SSH private key (remote, sifresiz)
 #   - Secret    APP_ENV        : (opsiyonel) KEY=VALUE satirlari
 
@@ -29,15 +29,21 @@ on:
         required: true
         type: choice
         options:
-          - build_from_source
           - ci_artifact
-        default: build_from_source
+          - build_from_source
+        default: ci_artifact
 
 run-name: Deploy - ${{ github.actor }} - ${{ inputs.description }}
 
 concurrency:
   group: deploy-${{ github.repository }}
   cancel-in-progress: false
+
+# En az yetki / least privilege: sadece checkout + CI artifact API okuma
+# Only checkout + read access to the CI artifact API
+permissions:
+  contents: read
+  actions: read
 
 env:
   DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'local' }}
@@ -109,15 +115,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN_ID="$(gh run list \
+          META="$(gh run list \
             --repo "${{ github.repository }}" \
             --workflow=ci.yml \
             --branch="${{ github.ref_name }}" \
             --status=success \
             --limit=1 \
-            --json databaseId -q '.[0].databaseId')"
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            --json databaseId,headSha -q '.[0] | "\(.databaseId)|\(.headSha)"')"
+          RUN_ID="${META%%|*}"
+          RUN_SHA="${META##*|}"
+          if [ -z "$META" ] || [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
             echo "Basarili CI run bulunamadi / no successful CI run found"
+            exit 1
+          fi
+          # Provenance: artifacti ureten commit, deploy edilen commit ile ayni olmali.
+          # Provenance: the commit that produced the artifact must equal the deployed commit.
+          if [ "$RUN_SHA" != "${{ github.sha }}" ]; then
+            echo "HATA / ERROR: CI artifact commit ($RUN_SHA) != deploy commit (${{ github.sha }})."
+            echo "Bu commit icin CI'i calistirin ya da kaynak olarak 'build_from_source' secin."
+            echo "Run CI for this commit, or choose 'build_from_source' as the source."
             exit 1
           fi
           ROOT="$(mktemp -d)"

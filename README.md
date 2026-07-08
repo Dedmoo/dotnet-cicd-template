@@ -44,6 +44,8 @@
 | **Çok servis desteği** | Tek `SERVICES` bloğuyla N servis / N services via one `SERVICES` block |
 | **Atomik güncelleme** | `rsync --delete` ile tutarlı dosya durumu / Consistent files via `rsync --delete` |
 | **Eşzamanlılık koruması** | Çakışan deploy/rollback engellenir / Prevents clashing deploy/rollback |
+| **Köken doğrulama (provenance)** | `ci_artifact`'ın commit'i, deploy commit'i ile birebir eşleşmezse deploy durur / Deploy stops if the artifact's commit does not match the deploy commit |
+| **En az yetki (least privilege)** | İş akışları yalnızca gereken okuma yetkileriyle çalışır / Workflows run with only the minimal read permissions |
 
 ---
 
@@ -108,6 +110,10 @@ flowchart TB
 
 **EN:** On push to `main`, each service is published (`dotnet publish`) and stored for 30 days as a **single combined artifact** (`app-publish`). This enables one of the pipeline's key principles: **build-once, deploy-many.** The tested build and the shipped build are **byte-for-byte identical**; at deploy time this validated output can be used without rebuilding (the `ci_artifact` source).
 
+**TR — Köken doğrulama (provenance):** `ci_artifact` ile deploy edilirken, artifact'ı üreten CI çalışmasının commit'i (`headSha`) ile o an deploy edilen commit (`github.sha`) karşılaştırılır. Eşleşmezse deploy **durur**. Böylece "test edilen commit ile canlıya çıkan commit farklı" durumu engellenir; bu, `ci_artifact`'ı varsayılan ve güvenli kaynak yapan garantidir.
+
+**EN — Provenance:** When deploying with `ci_artifact`, the commit of the CI run that produced the artifact (`headSha`) is compared with the commit being deployed (`github.sha`). If they differ, the deploy **stops**. This prevents "the tested commit differs from the shipped commit" and is the guarantee that makes `ci_artifact` the default, safe source.
+
 ---
 
 ## 3. Sürekli Dağıtım (Deploy) / Continuous Deployment
@@ -117,7 +123,7 @@ flowchart TB
 **EN:** Deploy is **not automatic** — it is a deliberate, manually triggered (`workflow_dispatch`) action. It takes two inputs:
 
 - `description` — **TR:** Bu dağıtımda neyin değiştiğinin açıklaması (zorunlu). / **EN:** A description of what changed in this deploy (required).
-- `source` — **TR:** Kaynak: `build_from_source` (deploy anında kaynaktan derle) veya `ci_artifact` (son başarılı CI çıktısını kullan). / **EN:** Source: `build_from_source` (rebuild at deploy) or `ci_artifact` (use latest successful CI output).
+- `source` — **TR:** Kaynak: `ci_artifact` (**varsayılan/önerilen** — son başarılı CI çıktısını kullanır, commit köken doğrulaması yapılır) veya `build_from_source` (deploy anında kaynaktan derler; ör. henüz CI artifact'ı olmayan ilk kurulum veya acil/hata ayıklama durumları). / **EN:** Source: `ci_artifact` (**default/recommended** — uses the latest successful CI output with commit provenance check) or `build_from_source` (rebuild at deploy; e.g. first setup with no CI artifact yet, or emergency/debug cases).
 
 **TR:** Onay verildikten sonra dağıtım şu adımlarla ilerler:
 
@@ -125,7 +131,7 @@ flowchart TB
 
 | # | Adım / Step | Ne yapar / What it does |
 |---|---|---|
-| 1 | Kaynak hazırlığı / source prep | `build_from_source` → derle+test / `ci_artifact` → artifact indir |
+| 1 | Kaynak hazırlığı / source prep | `ci_artifact` → artifact indir + commit köken doğrulaması / download artifact + commit provenance check · `build_from_source` → derle+test / build+test |
 | 2 | **backup** | Mevcut `/opt/...` dizinlerini `*.previous`'a kopyalar / Copies current dirs to `*.previous` |
 | 3 | **publish** | Yeni sürümü `rsync -a --delete` ile hedefe yansıtır (atomik) / Mirrors new release atomically |
 | 4 | **write-info** | `.deploy-info` dosyasına künye yazar / Writes deployment record |
@@ -148,6 +154,17 @@ flowchart TB
 - **TR:** Hiçbir üretim dağıtımı, kimsenin haberi olmadan tek bir olayla gerçekleşemez. / **EN:** No production deploy can happen through a single event without anyone's awareness.
 - **TR:** Onay bekleyen dağıtım GitHub arayüzünde görünür; kim tetikledi, hangi açıklamayla — hepsi kayıtlıdır. / **EN:** A pending deploy is visible in the GitHub UI; who triggered it and with what description — all recorded.
 - **TR:** `run-name`, dağıtımı yapanı ve açıklamayı içerir (ör. `Deploy - Dedmoo - ana sayfa güncellendi`). / **EN:** `run-name` includes the actor and description (e.g., `Deploy - Dedmoo - homepage updated`).
+
+**TR — Önerilen `production` ortam sertleştirmesi (Settings → Environments → `production`):** Onay kapısını gerçekten etkili kılmak için şu ayarlar önerilir:
+
+**EN — Recommended `production` environment hardening (Settings → Environments → `production`):** To make the approval gate genuinely effective, the following settings are recommended:
+
+| Ayar / Setting | Neden / Why |
+|---|---|
+| **Required reviewers** (≥1) | Onaysız üretim dağıtımı olamaz / No unapproved production deploy |
+| **Prevent self-review** | Deploy'u tetikleyen kişi kendi dağıtımını onaylayamaz / The triggering actor cannot approve their own deploy |
+| **Deployment branches: yalnızca `main` / `main` only** | Yanlışlıkla feature dalından üretime çıkış engellenir / Prevents accidental deploys from a feature branch |
+| **Wait timer** (ör. 5–15 dk, opsiyonel) | Onay sonrası "vazgeç" penceresi / A cancel window after approval |
 
 ```mermaid
 sequenceDiagram
@@ -248,7 +265,7 @@ note=ana sayfa metni güncellendi
 | Variable | `SSH_HOST` | remote için / for remote | Uzak sunucu IP veya hostname / remote server IP or hostname |
 | Variable | `SSH_USER` | remote için / for remote | SSH kullanıcısı (ör. `deploy`) / SSH user (e.g. `deploy`) |
 | Variable | `SSH_PORT` | Hayır / No | SSH portu (varsayılan `22`) / SSH port (default `22`) |
-| Variable | `SSH_KNOWN_HOSTS` | Hayır / No | Sunucu host key satırı (boşsa otomatik `ssh-keyscan`) |
+| Variable | `SSH_KNOWN_HOSTS` | Önerilir / Recommended | Sunucu host key satırı (`ssh-keyscan` çıktısı); doldurmak bağlantı sıfırlanmalarını önler / server host key line; setting it avoids connection resets |
 | Variable | `ARTIFACT_NAME` | Hayır / No | Artifact adı (varsayılan `app-publish`) |
 | Secret | `SSH_PRIVATE_KEY` | remote için / for remote | Deploy SSH **private key** (şifresiz bağlantı) |
 | Secret | `APP_ENV` | Hayır / No | `KEY=VALUE`: bağlantı dizeleri, API anahtarları |
@@ -351,15 +368,15 @@ bash scripts/setup-remote-host.sh
 
 ### 4. Uzak kullanıcı yetkileri / Remote user permissions
 
-**TR:** Deploy kullanıcısının `sudo` ile `systemctl restart`, `mkdir`, `cp`, `rm` çalıştırabilmesi gerekir (şifresiz önerilir):
+**TR:** Deploy kullanıcısının `sudo` ile `systemctl`, `mkdir`, `cp`, `rm`, `chown` çalıştırabilmesi gerekir (şifresiz önerilir):
 
 ```
-deploy ALL=(ALL) NOPASSWD: /bin/systemctl, /bin/mkdir, /bin/cp, /bin/rm, /usr/bin/pkill
+deploy ALL=(ALL) NOPASSWD: /bin/systemctl, /bin/mkdir, /bin/cp, /bin/rm, /bin/chown
 ```
 
-`/opt/...` dizinlerine yazma yetkisi de verilmelidir.
+`/opt/...` dizinlerine yazma yetkisi de verilmelidir. (`pkill` gerekmez — yeniden başlatma yalnızca `systemctl` ile yapılır.)
 
-**EN:** The deploy user needs passwordless `sudo` for `systemctl`, file ops under `/opt/...`.
+**EN:** The deploy user needs passwordless `sudo` for `systemctl`, `mkdir`, `cp`, `rm`, `chown` under `/opt/...`. (`pkill` is not required — restarts use `systemctl` only.)
 
 ### Local vs Remote
 
@@ -369,6 +386,37 @@ deploy ALL=(ALL) NOPASSWD: /bin/systemctl, /bin/mkdir, /bin/cp, /bin/rm, /usr/bi
 | Sunucuya SSH | Gerekmez | **SSH key gerekir** |
 | `health_url` | `http://127.0.0.1:port` | `http://<sunucu-ip>:port` |
 | Kurulum | `setup-host.sh` (yerel) | `setup-remote-host.sh` (SSH) |
+
+### Sorun giderme (uzak/remote bağlantı) / Troubleshooting (remote connection)
+
+**TR:** Uzak sunucuya bağlanırken en sık karşılaşılan durumlar ve çözümleri. Çoğu sorun SSH anahtarı, host doğrulaması veya sudo yetkisi kaynaklıdır.
+
+**EN:** The most common situations when connecting to a remote server, and their fixes. Most issues come from the SSH key, host verification or sudo permissions.
+
+| Belirti / Symptom | Olası neden / Likely cause | Çözüm / Fix |
+|---|---|---|
+| `kex_exchange_identification: Connection reset by peer` / bağlantı arada sıfırlanıyor | Modern sshd (OpenSSH 9.8+) çok sayıda kısa/doğrulamasız bağlantıyı `PerSourcePenalties` ile cezalandırır. Genelde her adımda `ssh-keyscan` yapılmasından tetiklenir. | `SSH_KNOWN_HOSTS` variable'ını doldurun (aşağıya bakın) — böylece `ssh-keyscan` tekrarlanmaz. Gerekirse sunucuda `sshd_config` → `PerSourcePenalties no` (dikkatli olun). |
+| `Host key verification failed` | `StrictHostKeyChecking=yes` açık ve host `known_hosts`'ta yok. | `SSH_KNOWN_HOSTS` variable'ına host anahtarını koyun: `ssh-keyscan -p <port> <host>` çıktısını yapıştırın. |
+| `Permission denied (publickey)` | Public key sunucuda yok, yanlış kullanıcı veya izinler hatalı. | `deploy_key.pub`'ı `~<SSH_USER>/.ssh/authorized_keys`'e ekleyin; `SSH_USER` doğru olsun; `chmod 700 ~/.ssh`, `chmod 600 authorized_keys`. |
+| `Load key ... invalid format` / `error in libcrypto` | `SSH_PRIVATE_KEY` secret'ı eksik/bozuk yapıştırılmış. | Anahtarın **tümünü** (`-----BEGIN...` ve `-----END...` satırları dahil) yapıştırın. `ed25519` ve **şifresiz** (passphrase yok) key kullanın. |
+| `sudo: a password is required` / restart-backup adımı takılıyor | Deploy kullanıcısında şifresiz `sudo` yok. | Sunucuda sudoers (`visudo`): `deploy ALL=(ALL) NOPASSWD: /bin/systemctl, /bin/mkdir, /bin/cp, /bin/rm, /bin/chown`. |
+| Health başarısız ama servis ayakta | `health_url` runner'dan erişilemiyor (`127.0.0.1` yazılmış) veya port firewall'da kapalı. | Remote'ta `health_url = http://<sunucu-ip>:port`; güvenlik grubunda/firewall'da o portu runner'a açın. |
+| `Connection timed out` | Port/firewall veya yanlış `SSH_HOST`/`SSH_PORT`. | Sunucuda 22 (veya `SSH_PORT`) portunu runner IP'sine açın; `SSH_HOST` ve `SSH_PORT` değerlerini doğrulayın. |
+| `rsync: command not found` | rsync runner'da **veya** sunucuda kurulu değil. | İki tarafta da kurun: `sudo apt-get install -y rsync`. |
+| İlk deploy'da `App.dll bulunamadı` | `setup-remote-host.sh` çalıştı ama henüz deploy yapılmadı (`/opt/...` boş). | Önce bir Deploy tetikleyin; systemd servisi ilk yayından sonra ayağa kalkar. |
+
+**TR — `SSH_KNOWN_HOSTS` nasıl alınır (tavsiye edilir):**
+
+**EN — How to get `SSH_KNOWN_HOSTS` (recommended):**
+
+```bash
+ssh-keyscan -p 22 10.0.0.5
+# çıktının tamamını / the whole output ->  Variable: SSH_KNOWN_HOSTS
+```
+
+**TR:** Bunu doldurmak hem "host key verification" hatasını hem de tekrarlı `ssh-keyscan` kaynaklı bağlantı sıfırlanmalarını önler. Boş bırakılırsa blueprint host'u ilk adımda bir kez tarar (`known_hosts`'a ekler) ve sonraki adımlarda tekrar taramaz.
+
+**EN:** Setting this avoids both the "host key verification" error and the connection resets caused by repeated `ssh-keyscan`. If left empty, the blueprint scans the host once on the first step (adds it to `known_hosts`) and does not re-scan on later steps.
 
 ---
 
@@ -390,7 +438,7 @@ deploy ALL=(ALL) NOPASSWD: /bin/systemctl, /bin/mkdir, /bin/cp, /bin/rm, /usr/bi
 | **Settings → Variables** → `SERVICES` | Proje yolu, deploy dizini, **health_url = sunucu IP** | Evet / Yes | Proje başına |
 | Aynı yer → `RUNNER_LABEL` | `ubuntu-latest` (remote) veya `self-hosted` (local) | Hayır / No | Gerekirse |
 | **Settings → Secrets** → `APP_ENV` | DB / API gizli ayarlar | Hayır / No | Gerekirse |
-| **Settings → Environments** → `production` | Onaylayan kişi | Evet / Yes | 1 kez |
+| **Settings → Environments** → `production` | Onaylayan kişi + sertleştirme (self-review engelle, yalnızca `main`) / reviewer + hardening (prevent self-review, `main` only) | Evet / Yes | 1 kez |
 | Uzak sunucu (remote) | `bash scripts/setup-remote-host.sh` (SSH ile systemd) | remote için | 1 kez |
 | Yerel host (local) | `sudo bash scripts/setup-host.sh` | local için | 1 kez |
 
@@ -480,7 +528,7 @@ deploy ALL=(ALL) NOPASSWD: /bin/systemctl, /bin/mkdir, /bin/cp, /bin/rm, /usr/bi
 1. **TR:** `templates/.github` ve `templates/scripts` klasörlerini kendi deponuzun köküne kopyalayın. / **EN:** Copy `templates/.github` and `templates/scripts` to your repository root.
 2. **TR:** GitHub → Settings → Secrets and variables → Actions → **Variables**: `SERVICES` (ve gerekiyorsa `RUNNER_LABEL`) ekleyin. / **EN:** Add the `SERVICES` variable (and `RUNNER_LABEL` if needed).
 3. **TR:** (Opsiyonel) **Secrets** → `APP_ENV`: bağlantı dizeleri / API anahtarları. / **EN:** (Optional) Secret `APP_ENV`: connection strings / API keys.
-4. **TR:** GitHub → Settings → Environments → `production` ekleyip **required reviewers** tanımlayın (onay kapısı). / **EN:** Add a `production` environment with **required reviewers** (approval gate).
+4. **TR:** GitHub → Settings → Environments → `production` ekleyip **required reviewers** tanımlayın; **prevent self-review** ve **yalnızca `main`** dalını açın (onay kapısı sertleştirmesi). / **EN:** Add a `production` environment with **required reviewers**; enable **prevent self-review** and **`main`-only** branch (approval gate hardening).
 5. **TR:** Host'ta bir kez (systemd birimlerini kurar) / **EN:** Once on the host (creates systemd units):
    ```bash
    sudo SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001" \

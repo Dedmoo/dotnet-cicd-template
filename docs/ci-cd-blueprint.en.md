@@ -111,14 +111,15 @@ This block is defined in one place as a **repo variable (`vars.SERVICES`)** on G
 - **Does:** .NET version validation → NuGet cache → restore → build → test.
 - **Artifact:** Only on push to `main`, each service is published under `PUBLISH_ROOT/<name>` and retained for 30 days as a **single combined artifact** (`app-publish`).
 - **Why decoupled?** This tested output can later be deployed unchanged (*build-once, deploy-many*).
+- **Permissions:** Workflows run with least privilege (`permissions: contents: read`); the token's scope is not left needlessly broad.
 
 ### 4.2 Deploy (`deploy.yml` + `pipeline.sh`)
 
-Manually triggered (`workflow_dispatch`), taking two inputs: `description` (mandatory) and `source` (`build_from_source` or `ci_artifact`). Flow:
+Manually triggered (`workflow_dispatch`), taking two inputs: `description` (mandatory) and `source`. The `source` default is **`ci_artifact`** (recommended): it uses the latest successful CI output and performs a **commit provenance check** — if the commit of the CI run that produced the artifact (`headSha`) does not match the deployed commit (`github.sha`), the deploy stops. `build_from_source` rebuilds from source at deploy time (for first setup or emergency/debug). Flow:
 
 ```mermaid
 flowchart TB
-    A["Manual trigger + production approval"] --> B["build+test OR download CI artifact"]
+    A["Manual trigger + production approval"] --> B["download CI artifact (+commit provenance) OR build+test"]
     B --> C["backup: current -> *.previous"]
     C --> D["publish-source OR deploy-artifacts (rsync --delete)"]
     D --> E["write-info: .deploy-info (who/when/commit)"]
@@ -139,8 +140,10 @@ Two modes: `previous_folder` (instant reversion from the `*.previous` backup) an
 
 | Principle | How it is applied | Benefit |
 |---|---|---|
-| Build-once, deploy-many | `ci_artifact` source | Tested equals released, byte-for-byte |
-| Approval gate | `environment: production` | Prevents unauthorized production deploys |
+| Build-once, deploy-many | `ci_artifact` source (default) | Tested equals released, byte-for-byte |
+| Provenance | `ci_artifact` commit == deploy commit | The tested commit equals the released commit |
+| Approval gate | `environment: production` + reviewer/self-review/`main` | Prevents unauthorized production deploys |
+| Least privilege | `permissions: contents: read` (+ `actions: read` on deploy) | Narrows the token's scope |
 | Auditability | `.deploy-info` + `run-name` | Who/when/why record |
 | Atomic update | staging + `rsync --delete` | No partial/mixed file state |
 | Fail-safe | health + automatic rollback | Minimizes impact of a faulty deploy |
@@ -156,7 +159,7 @@ To use this template you **edit no files.** All application-specific values are 
    - `RUNNER_LABEL` (optional): runner label (default `self-hosted`).
    - `ARTIFACT_NAME` (optional): artifact name (default `app-publish`).
 3. **Add Secrets (optional):** Put `KEY=VALUE` lines into the `APP_ENV` secret (connection strings, API keys). At deploy it is injected into each service as `.env`; .NET applies them over `appsettings` automatically.
-4. **Create the `production` environment:** Settings → Environments → add `production` and define **required reviewers** (the approval gate).
+4. **Create and harden the `production` environment:** Settings → Environments → add `production`; define **required reviewers**, enable **prevent self-review**, and restrict deployments to the **`main`** branch only (you may add an optional **wait timer**). These settings make the approval gate genuinely effective.
 5. **Prepare the host:** Once on the runner machine (with the same `SERVICES` value as step 2):
    ```bash
    sudo SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001" \

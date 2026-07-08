@@ -17,6 +17,11 @@ concurrency:
   group: ci-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: true
 
+# En az yetki / least privilege: derleme/test/artifact icin sadece okuma yeterli
+# Only read access is needed for build/test/artifact
+permissions:
+  contents: read
+
 jobs:
   build-test:
     uses: ./.github/workflows/reusable-dotnet-ci.yml

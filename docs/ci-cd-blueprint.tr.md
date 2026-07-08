@@ -111,14 +111,15 @@ Bu blok, GitHub'da bir **repo değişkeni (`vars.SERVICES`)** olarak tek yerde t
 - **Yapar:** .NET sürüm doğrulama → NuGet cache → restore → build → test.
 - **Artifact:** Yalnızca `main`'e push'ta, her servis `PUBLISH_ROOT/<name>` altına yayımlanır ve **tek birleşik artifact** (`app-publish`) olarak 30 gün saklanır.
 - **Neden ayrık?** Testten geçen bu çıktı, daha sonra dağıtımda değişmeden kullanılabilir (*build-once, deploy-many*).
+- **İzinler:** İş akışları en az yetkiyle çalışır (`permissions: contents: read`); token'ın etki alanı gereksiz yere geniş bırakılmaz.
 
 ### 4.2 Deploy (`deploy.yml` + `pipeline.sh`)
 
-Elle tetiklenir (`workflow_dispatch`), iki girdi alır: `description` (zorunlu açıklama) ve `source` (`build_from_source` veya `ci_artifact`). Akış:
+Elle tetiklenir (`workflow_dispatch`), iki girdi alır: `description` (zorunlu açıklama) ve `source`. `source` varsayılanı **`ci_artifact`**'tır (önerilen): son başarılı CI çıktısını kullanır ve **commit köken doğrulaması** yapar — artifact'ı üreten CI çalışmasının commit'i (`headSha`) ile deploy edilen commit (`github.sha`) eşleşmezse deploy durur. `build_from_source` ise deploy anında kaynaktan derler (ilk kurulum veya acil/hata ayıklama için). Akış:
 
 ```mermaid
 flowchart TB
-    A["Elle tetikleme + production onayi"] --> B["build+test VEYA CI artifact indir"]
+    A["Elle tetikleme + production onayi"] --> B["CI artifact indir (+commit koken dogrulama) VEYA build+test"]
     B --> C["backup: mevcut -> *.previous"]
     C --> D["publish-source VEYA deploy-artifacts (rsync --delete)"]
     D --> E["write-info: .deploy-info (kim/ne zaman/commit)"]
@@ -139,8 +140,10 @@ flowchart TB
 
 | İlke | Nasıl uygulanır | Kazanç |
 |---|---|---|
-| Build-once, deploy-many | `ci_artifact` kaynağı | Test edilen ile yayınlanan birebir aynı |
-| Onay kapısı | `environment: production` | İzinsiz üretim dağıtımı engellenir |
+| Build-once, deploy-many | `ci_artifact` kaynağı (varsayılan) | Test edilen ile yayınlanan birebir aynı |
+| Köken doğrulama (provenance) | `ci_artifact` commit'i == deploy commit'i | Test edilen commit ile yayınlanan commit aynı |
+| Onay kapısı | `environment: production` + reviewer/self-review/`main` | İzinsiz üretim dağıtımı engellenir |
+| En az yetki (least privilege) | `permissions: contents: read` (+ deploy'da `actions: read`) | Token'ın etki alanı daraltılır |
 | Denetlenebilirlik | `.deploy-info` + `run-name` | Kim/ne zaman/neden kaydı |
 | Atomik güncelleme | staging + `rsync --delete` | Yarım/karışık dosya durumu olmaz |
 | Fail-safe | health + otomatik rollback | Hatalı dağıtımın etkisi en aza iner |
@@ -156,7 +159,7 @@ Bu şablonu kullanmak için **hiçbir dosyayı düzenlemezsiniz.** Uygulamaya ö
    - `RUNNER_LABEL` (opsiyonel): çalıştırıcı etiketi (varsayılan `self-hosted`).
    - `ARTIFACT_NAME` (opsiyonel): artifact adı (varsayılan `app-publish`).
 3. **Gizli bilgileri girin (Secrets, opsiyonel):** `APP_ENV` secret'ine `KEY=VALUE` satırları koyun (bağlantı dizeleri, API anahtarları). Deploy'da her servise `.env` olarak enjekte edilir; .NET bunları `appsettings` üzerine otomatik uygular.
-4. **`production` ortamını oluşturun:** Settings → Environments → `production` ekleyin ve **required reviewers** tanımlayın (onay kapısı).
+4. **`production` ortamını oluşturun ve sertleştirin:** Settings → Environments → `production` ekleyin; **required reviewers** tanımlayın, **prevent self-review**'i açın ve dağıtımı **yalnızca `main`** dalına kısıtlayın (opsiyonel bir **wait timer** ekleyebilirsiniz). Bu ayarlar onay kapısını gerçekten etkili kılar.
 5. **Host'u hazırlayın:** Çalıştırıcı makinesinde bir kez (adım 2'deki `SERVICES` değerinin aynısıyla):
    ```bash
    sudo SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001" \

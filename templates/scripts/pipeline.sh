@@ -32,6 +32,15 @@ services_lines() {
     | grep -vE '^\s*(#.*)?$'
 }
 
+# NOT: Asagidaki servis donguleri 'read <&3' + '3< <(services_lines)' kullanir.
+# Gerekce: dongu govdesindeki ssh/rsync stdin'i (FD 0) okur; eger dongu stdin'den
+# beslenseydi ssh kalan servis satirlarini yutar ve yalnizca ilk servis islenirdi.
+# FD 3 ayrimi bu yuzden zorunludur (uzak/remote deploy'da coklu servis icin).
+# NOTE: The service loops below use 'read <&3' + '3< <(services_lines)'. Reason: ssh/rsync
+# in the loop body reads stdin (FD 0); if the loop were fed from stdin, ssh would consume the
+# remaining service lines and only the first service would be processed. The FD 3 separation
+# is therefore required (for multi-service remote deploys).
+
 field() {
   printf '%s' "$1" | cut -d'|' -f"$2" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
@@ -98,13 +107,17 @@ target_write_info_one() {
 }
 
 target_restart_one() {
-  local dd="$1"
-  local svc="$2"
+  local svc="$1"
+  # systemd birim, surecin yasam dongusunu yonetir: restart eskisini (cgroup ile) durdurup
+  # yenisini baslatir. Manuel 'pkill -f "dotnet <dir>"' hem gereksizdir hem de uzak modda
+  # sarmalayan kabugun komut satiri ayni metni icerdigi icin kabugu kendisiyle eslestirip
+  # oldurebilir (bu yuzden systemctl restart hic calismaz). Bu nedenle kullanilmiyor.
+  # systemd manages the process lifecycle: restart stops the old one (via cgroup) and starts
+  # the new one. A manual 'pkill -f "dotnet <dir>"' is redundant and, in remote mode, can
+  # match and kill the wrapping shell itself (so systemctl restart never runs). Hence unused.
   if is_remote; then
-    remote_sudo "pkill -f 'dotnet ${dd}' || true; sleep 1; systemctl restart '${svc}'"
+    remote_sudo "systemctl restart '${svc}'"
   else
-    pkill -f "dotnet ${dd}" || true
-    sleep 1
     systemctl restart "$svc"
   fi
 }
@@ -113,11 +126,9 @@ target_rollback_one() {
   local dd="$1"
   local svc="$2"
   if is_remote; then
-    remote_sudo "if [ -d '${dd}.previous' ]; then pkill -f 'dotnet ${dd}' || true; sleep 1; rm -rf '$dd'; cp -a '${dd}.previous' '$dd'; systemctl restart '${svc}'; else exit 1; fi"
+    remote_sudo "if [ -d '${dd}.previous' ]; then rm -rf '$dd'; cp -a '${dd}.previous' '$dd'; systemctl restart '${svc}'; else exit 1; fi"
   else
     if [ -d "${dd}.previous" ]; then
-      pkill -f "dotnet ${dd}" || true
-      sleep 1
       rm -rf "$dd"
       cp -a "${dd}.previous" "$dd"
       systemctl restart "$svc"
@@ -128,7 +139,7 @@ target_rollback_one() {
 }
 
 cmd_backup() {
-  while IFS= read -r line; do
+  while IFS= read -r line <&3; do
     local dd; dd="$(field "$line" 3)"
     if target_dir_exists "$dd"; then
       target_backup_one "$dd"
@@ -136,11 +147,11 @@ cmd_backup() {
     else
       echo "yedeklenecek surum yok / nothing to back up: $dd"
     fi
-  done < <(services_lines)
+  done 3< <(services_lines)
 }
 
 cmd_publish_source() {
-  while IFS= read -r line; do
+  while IFS= read -r line <&3; do
     local csproj dd staging
     csproj="$(field "$line" 2)"
     dd="$(field "$line" 3)"
@@ -149,12 +160,12 @@ cmd_publish_source() {
     target_publish_dir "$staging" "$dd"
     rm -rf "$staging"
     echo "yayinlandi (kaynaktan) / published (from source): $csproj -> $dd"
-  done < <(services_lines)
+  done 3< <(services_lines)
 }
 
 cmd_deploy_artifacts() {
   : "${ARTIFACT_ROOT:?ARTIFACT_ROOT tanimli degil / ARTIFACT_ROOT not set}"
-  while IFS= read -r line; do
+  while IFS= read -r line <&3; do
     local name dd src
     name="$(field "$line" 1)"
     dd="$(field "$line" 3)"
@@ -165,7 +176,7 @@ cmd_deploy_artifacts() {
     fi
     target_publish_dir "$src" "$dd"
     echo "yayinlandi (artifact) / published (artifact): $src -> $dd"
-  done < <(services_lines)
+  done 3< <(services_lines)
 }
 
 cmd_write_env() {
@@ -173,15 +184,15 @@ cmd_write_env() {
     echo "APP_ENV bos, atlaniyor / empty, skipped"
     return 0
   fi
-  while IFS= read -r line; do
+  while IFS= read -r line <&3; do
     local dd; dd="$(field "$line" 3)"
     target_write_env_one "$dd" "$APP_ENV"
     echo "gizli ortam yazildi / secret env written: ${dd}/.env"
-  done < <(services_lines)
+  done 3< <(services_lines)
 }
 
 cmd_write_info() {
-  while IFS= read -r line; do
+  while IFS= read -r line <&3; do
     local dd info
     dd="$(field "$line" 3)"
     info="deploy_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -191,34 +202,33 @@ deploy_target=${DEPLOY_TARGET}
 note=${DEPLOY_NOTE:-}"
     target_write_info_one "$dd" "$info"
     echo "deploy bilgisi yazildi / deploy info written: ${dd}/.deploy-info"
-  done < <(services_lines)
+  done 3< <(services_lines)
 }
 
 cmd_restart() {
-  while IFS= read -r line; do
-    local dd svc
-    dd="$(field "$line" 3)"
+  while IFS= read -r line <&3; do
+    local svc
     svc="$(field "$line" 4)"
-    target_restart_one "$dd" "$svc"
+    target_restart_one "$svc"
     echo "yeniden baslatildi / restarted: $svc"
-  done < <(services_lines)
+  done 3< <(services_lines)
 }
 
 cmd_health() {
   local fail=0
-  while IFS= read -r line; do
+  while IFS= read -r line <&3; do
     local url
     url="$(field "$line" 5)"
     if ! bash "${SCRIPT_DIR}/verify-health.sh" "$url"; then
       fail=1
     fi
-  done < <(services_lines)
+  done 3< <(services_lines)
   return "$fail"
 }
 
 cmd_rollback() {
   local fail=0
-  while IFS= read -r line; do
+  while IFS= read -r line <&3; do
     local dd svc
     dd="$(field "$line" 3)"
     svc="$(field "$line" 4)"
@@ -228,7 +238,7 @@ cmd_rollback() {
       echo "geri alinacak surum yok / no previous release: ${dd}.previous"
       fail=1
     fi
-  done < <(services_lines)
+  done 3< <(services_lines)
   return "$fail"
 }
 

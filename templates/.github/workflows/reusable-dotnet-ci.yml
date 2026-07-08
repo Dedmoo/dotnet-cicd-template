@@ -28,6 +28,11 @@ on:
         type: string
         default: app-publish
 
+# En az yetki / least privilege: derleme/test/artifact icin sadece okuma
+# Only read access is needed for build/test/artifact
+permissions:
+  contents: read
+
 jobs:
   build-test:
     runs-on: ${{ vars.RUNNER_LABEL || 'self-hosted' }}

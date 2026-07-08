@@ -33,6 +33,11 @@ concurrency:
   group: deploy-${{ github.repository }}
   cancel-in-progress: false
 
+# En az yetki / least privilege: checkout + derleme icin sadece okuma
+# Only read access for checkout + build
+permissions:
+  contents: read
+
 env:
   DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'local' }}
   SERVICES: ${{ vars.SERVICES }}
