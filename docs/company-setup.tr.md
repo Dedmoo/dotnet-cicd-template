@@ -1,165 +1,269 @@
 # Firma Kurulum Rehberi — dotnet-cicd-template
 
-**TR:** Bu rehber, `dotnet-cicd-template`'i kendi projenize uyarlamak için gereken **tüm yapılandırma adımlarını tek bir yerde** listeler. Hiçbir YML dosyasına dokunmazsınız; tüm proje bilgileri GitHub arayüzü üzerinden Variables ve Secrets olarak girilir.
+Bu rehber, projeyi hiç bilmeyen biri için yazılmıştır. YML dosyasına dokunmazsınız. Tüm ayarlar GitHub arayüzünden (Variables / Secrets / Environments) ve sunucuda bir kez yapılan kurulumdan gelir.
 
-**EN:** This guide lists **all configuration steps in one place** to adapt `dotnet-cicd-template` to your project. You do not touch any YML file; all project values are entered via the GitHub UI as Variables and Secrets.
+İngilizce sürüm: [`company-setup.en.md`](./company-setup.en.md)
 
 ---
 
-## Adım 1 — Repoyu oluştur / Create the repo
+## Hangi yolu seçiyorsunuz?
 
-1. [github.com/Dedmoo/dotnet-cicd-template](https://github.com/Dedmoo/dotnet-cicd-template) sayfasına git.
-2. **Use this template → Create a new repository** ile kendi reponu oluştur.
-3. Oluşan repoda `templates/` klasörünü **kök dizine** taşı (`.github/` ve `scripts/` klasörleri kök dizinde olmalı).
+| Yol | Ne zaman | Bu rehberde |
+|---|---|---|
+| **Yerel (`local`)** | Runner ile uygulama **aynı** makinede | Adım 1 → 2 (local değişkenler) → 3 (`APP_ENV` opsiyonel) → 4 → 5 Yerel → 6 |
+| **Uzak (`remote`)** | Uygulama ayrı bir Linux sunucuda; runner GitHub `ubuntu-latest` | Adım 1 → **Sunucu hazırlığı (zorunlu)** → 2 (remote değişkenler) → 3 (SSH secret) → 4 → 5 Uzak → 6 |
 
-> Ağaç yapısı:
-> ```
-> repo-kökü/
-> ├── .github/
-> │   ├── actions/build-test/action.yml
-> │   └── workflows/
-> │       ├── continuous-integration.yml
-> │       ├── reusable-dotnet-build.yml
-> │       ├── production-deploy.yml
-> │       └── production-rollback.yml
-> └── scripts/
->     ├── pipeline.sh
->     ├── ssh-remote.sh
->     ├── verify-health.sh
->     ├── setup-host.sh
->     └── setup-remote-host.sh
-> ```
+Aşağıdaki **uzak** kritik maddelerin hepsi bu dosyada açıkça yazılıdır:
+
+1. Sunucuda `deploy` kullanıcısı + `NOPASSWD: ALL`
+2. `SSH_PRIVATE_KEY` secret (ed25519, şifresiz, BEGIN/END dahil)
+3. `SSH_KNOWN_HOSTS` variable (`ssh-keyscan` çıktısı)
+4. `DEPLOY_TARGET=remote`, `SSH_HOST`, `SSH_USER`, `RUNNER_LABEL=ubuntu-latest`
+5. Environments → `production` + required reviewers
+
+---
+
+## Adım 1 — Repoyu oluştur
+
+1. [github.com/Dedmoo/dotnet-cicd-template](https://github.com/Dedmoo/dotnet-cicd-template) sayfasına gidin.
+2. **Use this template → Create a new repository** ile kendi reponuzu oluşturun.
+3. Oluşan repoda `templates/` içeriğini **kök dizine** taşıyın (`.github/` ve `scripts/` kökte olmalı). .NET projenizi de aynı kökte tutun (`src/...`).
+
+Beklenen ağaç:
+
+```
+repo-kökü/
+├── .github/
+│   ├── actions/build-test/action.yml
+│   ├── dependabot.yml
+│   └── workflows/
+│       ├── continuous-integration.yml
+│       ├── reusable-dotnet-build.yml
+│       ├── production-deploy.yml
+│       └── production-rollback.yml
+├── scripts/
+│   ├── pipeline.sh
+│   ├── ssh-remote.sh
+│   ├── verify-health.sh
+│   ├── setup-host.sh
+│   └── setup-remote-host.sh
+└── src/   # sizin .NET kodunuz
+```
+
+---
+
+## Uzak sunucu hazırlığı (yalnızca `remote` — Adım 2'den ÖNCE)
+
+Bu adımlar **hedef Linux sunucuda**, bir kez, root/yönetici ile yapılır. Atlarsanız deploy `Permission denied` veya `sudo: a password is required` ile düşer.
+
+### U1 — `deploy` kullanıcısı + SSH public key
+
+Kendi bilgisayarınızda (veya güvenli bir yerde) anahtar üretin:
+
+```bash
+ssh-keygen -t ed25519 -C "deploy" -N "" -f deploy_key
+# deploy_key      → sonra GitHub Secret: SSH_PRIVATE_KEY
+# deploy_key.pub  → sunucuya eklenecek
+```
+
+Sunucuda:
+
+```bash
+sudo adduser --disabled-password --gecos "" deploy
+sudo mkdir -p /home/deploy/.ssh
+sudo chmod 700 /home/deploy/.ssh
+# public key'i ekleyin (içeriği tek satır yapıştırın):
+sudo tee /home/deploy/.ssh/authorized_keys < deploy_key.pub
+sudo chmod 600 /home/deploy/.ssh/authorized_keys
+sudo chown -R deploy:deploy /home/deploy/.ssh
+```
+
+### U2 — Şifresiz `sudo` (`NOPASSWD: ALL`) — zorunlu
+
+Pipeline her sunucu adımını `sudo bash -c "..."` ile çalıştırır. Dar komut listesi (`systemctl`, `mkdir` …) **yeterli değildir** ve deploy kırılır. Şunu ekleyin:
+
+```bash
+echo 'deploy ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/deploy
+sudo chmod 440 /etc/sudoers.d/deploy
+sudo visudo -cf /etc/sudoers.d/deploy
+```
+
+Doğrulama (sunucuda):
+
+```bash
+sudo -u deploy sudo -n true && echo "sudo OK"
+```
+
+Bu tam `sudo` yetkisidir. Daha güvenli tutmak için: `deploy` kullanıcısını yalnızca bu dağıtım sunucusuna özel açın; başka işlerde kullanmayın.
+
+### U3 — Sunucuda ek paketler
+
+Deploy ve sağlık kontrolü için tipik gereksinimler:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y rsync curl
+# .NET runtime/SDK — projenizin hedeflediği sürüm (ör. 8)
+```
+
+Firewall: SSH portu (çoğunlukla 22) runner'a açık olsun; uygulama portları (`SERVICES` içindeki `health_url` portları) health check için runner'ın erişebileceği şekilde açık olsun.
+
+### U4 — `SSH_KNOWN_HOSTS` için ham çıktıyı alın
+
+Kendi makinenizden (veya runner'ın erişebildiği yerden):
+
+```bash
+ssh-keyscan -p 22 <SUNUCU-IP-VEYA-HOSTNAME>
+```
+
+Çıktının **tamamını** kopyalayın; Adım 2'de GitHub Variable olarak yapıştırılacak.
 
 ---
 
 ## Adım 2 — Repository Variables
 
-**GitHub:** Settings → Secrets and variables → Actions → **Variables** sekmesi → **New repository variable**
+**GitHub:** Settings → Secrets and variables → Actions → **Variables** → **New repository variable**
 
-| Değişken / Variable | Zorunlu | Örnek değer / Example | Açıklama / Description |
-|---|---|---|---|
-| `SERVICES` | **Evet** | `web\|src/Web/Web.csproj\|/opt/myapp-web\|myapp-web\|http://127.0.0.1:5001` | Servis listesi, her satır `name\|csproj\|deploy_dir\|service_name\|health_url` formatında. Birden fazla servis için her servis ayrı satırda. |
-| `DEPLOY_TARGET` | Hayır | `local` veya `remote` | Varsayılan: `local`. Runner aynı zamanda hedef sunucuysa `local`; ayrı bir sunucuya SSH ile deploy için `remote`. |
-| `RUNNER_LABEL` | Hayır | `self-hosted` veya `ubuntu-latest` | Runner etiketi. `local` mod için `self-hosted`; `remote` mod için genellikle `ubuntu-latest`. |
-| `ARTIFACT_NAME` | Hayır | `app-publish` | CI artifact adı. Varsayılan `app-publish`; tek servis varsa değiştirmeniz gerekmez. |
-| `SSH_HOST` | Remote | `192.168.1.100` veya `myserver.com` | Hedef sunucunun IP veya hostname'i. Yalnızca `DEPLOY_TARGET=remote` için gerekli. |
-| `SSH_USER` | Remote | `deploy` | SSH kullanıcı adı. Yalnızca `DEPLOY_TARGET=remote` için gerekli. |
-| `SSH_PORT` | Hayır | `22` | SSH portu. Varsayılan `22`. |
-| `SSH_KNOWN_HOSTS` | Önerilir | `myserver.com ssh-ed25519 AAAA...` | Sunucunun host key satırı. `ssh-keyscan -p 22 <SSH_HOST>` çıktısını buraya yapıştırın. Boş bırakılırsa pipeline ilk adımda bir kez `ssh-keyscan` yapar; bu değer verilirse tarama hiç yapılmaz (modern `PerSourcePenalties` korumalı sunucularda daha güvenli). |
+### Her yol için zorunlu
 
-### `SERVICES` çok satırlı örnek / Multi-line example
+| Değişken | Örnek | Açıklama |
+|---|---|---|
+| `SERVICES` | aşağıya bakın | Her satır: `name\|csproj\|deploy_dir\|service_name\|health_url` |
+
+`SERVICES` örneği (tek servis):
+
+```
+web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001
+```
+
+İki servis:
 
 ```
 web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001
 api|src/Api/Api.csproj|/opt/myapp-api|myapp-api|http://127.0.0.1:5002
 ```
 
-GitHub Variables metin kutusuna her servis ayrı satıra yazılır.
+**Uzak (`remote`) için `health_url`:** `127.0.0.1` **kullanmayın**. Runner ayrı makinededir; sunucu IP/hostname yazın, örn. `http://203.0.113.10:5001`.
+
+### Yerel (`local`) ek değişkenler
+
+| Değişken | Değer |
+|---|---|
+| `DEPLOY_TARGET` | `local` (veya boş bırakın; varsayılan local) |
+| `RUNNER_LABEL` | `self-hosted` (runner etiketiniz neyse) |
+
+### Uzak (`remote`) — şu seti mutlaka doldurun
+
+| Değişken | Zorunlu | Değer |
+|---|---|---|
+| `DEPLOY_TARGET` | **Evet** | `remote` |
+| `SSH_HOST` | **Evet** | Sunucu IP veya hostname |
+| `SSH_USER` | **Evet** | `deploy` (U1'deki kullanıcı) |
+| `SSH_PORT` | Hayır | Varsayılan `22` |
+| `SSH_KNOWN_HOSTS` | **Güçlü öneri** | U4'teki `ssh-keyscan` çıktısının tamamı |
+| `RUNNER_LABEL` | **Evet (önerilen)** | `ubuntu-latest` |
+| `ARTIFACT_NAME` | Hayır | Varsayılan `app-publish` — değiştirirseniz CI ile aynı kalır |
+
+Boş `SSH_KNOWN_HOSTS` ile de çalışabilir (pipeline bir kez tarar); yine de doldurmanız modern SSH sunucularında (`PerSourcePenalties`) bağlantı sıfırlanmalarını önler.
 
 ---
 
 ## Adım 3 — Repository Secrets
 
-**GitHub:** Settings → Secrets and variables → Actions → **Secrets** sekmesi → **New repository secret**
+**GitHub:** Settings → Secrets and variables → Actions → **Secrets** → **New repository secret**
 
-| Secret | Zorunlu | Ne yapıştırılır / What to paste |
+| Secret | Ne zaman | Ne yapıştırılır |
 |---|---|---|
-| `SSH_PRIVATE_KEY` | Remote | `ed25519` formatında **şifresiz** SSH private key. `-----BEGIN OPENSSH PRIVATE KEY-----` ile başlayan ve `-----END OPENSSH PRIVATE KEY-----` ile biten tüm metni yapıştırın. Eksik satır veya boşluk olmadığından emin olun. |
-| `APP_ENV` | Hayır | `.env` formatında `KEY=VALUE` satırları. Deploy sırasında her servise `.env` olarak enjekte edilir. Örnek: `DATABASE_URL=postgresql://...` veya `API_KEY=abc123`. |
+| `SSH_PRIVATE_KEY` | **remote zorunlu** | `deploy_key` dosyasının **tümü**: `-----BEGIN OPENSSH PRIVATE KEY-----` … `-----END OPENSSH PRIVATE KEY-----`. Şifresiz (`-N ""`) ed25519. Eksik satır = `invalid format`. |
+| `APP_ENV` | Opsiyonel (local + remote) | `KEY=VALUE` satırları (`.env`). Deploy'da her servise `.env` olarak yazılır. |
 
-### SSH key oluşturma / Generating an SSH key
-
-```bash
-ssh-keygen -t ed25519 -C "deploy" -N "" -f deploy_key
-# deploy_key      → SSH_PRIVATE_KEY secret'ına yapıştır
-# deploy_key.pub  → sunucuda ~/.ssh/authorized_keys'e ekle
-```
+Private key'i asla Variables'a koymayın; yalnızca Secrets.
 
 ---
 
-## Adım 4 — `production` Ortamı (Environment)
+## Adım 4 — `production` Environment (zorunlu)
 
-**GitHub:** Settings → **Environments** → **New environment** → adı `production` yaz → **Configure**
+**GitHub:** Settings → **Environments** → **New environment** → adı tam olarak `production`
 
-| Ayar / Setting | Değer / Value | Neden / Why |
+| Ayar | Değer | Neden |
 |---|---|---|
-| **Required reviewers** | En az 1 kişi ekleyin | Onaysız üretim dağıtımı engellensin |
-| **Prevent self-review** | Açık / Enabled | Deploy'u tetikleyen kişi kendi dağıtımını onaylayamasın |
-| **Deployment branches** | `main` dalı seçin | Yanlışlıkla feature dalından üretime çıkış engellensin |
-| **Wait timer** | 5–15 dk (opsiyonel) | Onay verdikten sonra "vazgeç" için pencere |
+| **Required reviewers** | En az 1 kişi | Onaysız üretim dağıtımı olmasın |
+| **Prevent self-review** | Açık | Tetikleyen kendi dağıtımını onaylayamasın |
+| **Deployment branches** | yalnızca `main` | Feature dalından üretime çıkış olmasın |
+| **Wait timer** | 5–15 dk (opsiyonel) | Onay sonrası vazgeç penceresi |
 
-> Onay ekranında **prepare** job'unun özetini (açıklama, commit mesajı, SHA) gördükten sonra onay verin. "Onaylayan kişi Actions run sayfasında prepare özetine bakmadan onay vermesin."
+Deploy ve Rollback bu ortama bağlıdır. Onay vermeden önce Actions run sayfasındaki **`prepare` özetini** (açıklama, commit mesajı, SHA) okuyun.
 
 ---
 
-## Adım 5 — Host Kurulumu (Tek Sefer)
+## Adım 5 — Host kurulumu (tek sefer)
 
-### Yerel / Local (`DEPLOY_TARGET=local`)
+### Yerel
 
-Runner ile hedef sunucu aynı makineyse, runner makinesinde **bir kez** çalıştırın:
+Runner = sunucu makinesi:
 
 ```bash
 sudo SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001" \
      bash scripts/setup-host.sh
 ```
 
-Script yalnızca her servis için systemd birimini oluşturup `enable` eder (deploy dizinleri ilk deploy sırasında pipeline tarafından oluşturulur). Servisler ilk başarılı deploy'dan sonra başlar.
+Yalnızca systemd birimlerini oluşturur/enable eder. Dizinler ilk deploy'da oluşur; servisler ilk başarılı deploy'dan sonra ayakta kalır.
 
-### Uzak / Remote (`DEPLOY_TARGET=remote`)
+### Uzak
 
-Deploy runner'dan **SSH ile** hedef sunucuya bağlanarak kurulum yapılır:
+**Önce** U1–U2 (kullanıcı + sudoers) bitmiş olmalıdır. Sonra (SSH ile erişebildiğiniz bir makineden, private key elinizdeyken):
 
 ```bash
-SSH_HOST=192.168.1.100 \
+SSH_HOST=<SUNUCU-IP> \
 SSH_USER=deploy \
 SSH_PORT=22 \
 SSH_PRIVATE_KEY="$(cat deploy_key)" \
-SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001" \
+SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://<SUNUCU-IP>:5001" \
 bash scripts/setup-remote-host.sh
 ```
 
-**Sunucuda sudoers gereksinimi:** Pipeline dağıtım adımlarını (`mkdir`, `cp`, `rm`, `chown`, `mv`, `chmod`, `systemctl`) tek bir bileşik komut olarak `sudo bash -c "..."` ile çalıştırır. Bu nedenle komut bazlı dar bir whitelist **çalışmaz**; deploy kullanıcısına şifresiz tam `sudo` verilmelidir:
-
-```
-deploy ALL=(ALL) NOPASSWD: ALL
-```
-
-**Not:** Bu tam `sudo` yetkisidir. Daha kısıtlı istiyorsanız `deploy` kullanıcısını yalnızca bu dağıtım sunucusuna özel açın; başka görevlerde kullanmayın.
+`SERVICES` içindeki `health_url` burada da sunucu IP ile aynı olmalıdır. Bu script uzak sunucuda `setup-host.sh` çalıştırır (systemd unit'leri).
 
 ---
 
 ## Adım 6 — İlk CI ve Deploy
 
-1. `main` dalına bir push yapın → `continuous-integration.yml` otomatik tetiklenir → yeşil olduğunu doğrulayın.
-2. Actions → **Production Deploy** → **Run workflow** → Açıklama girin, **source: `ci_artifact`** seçili bırakın → **Run workflow**.
-3. Onaylayan kişi prepare özetini inceleyip onaylar → deploy başlar.
+1. `main`'e push → Actions'ta **Continuous Integration** yeşil olsun.
+2. Actions → **Production Deploy** → **Run workflow** → zorunlu açıklama yazın → kaynak `ci_artifact` kalsın → Run.
+3. Reviewer `prepare` özetini okuyup onaylasın → deploy koşar.
+4. Health fail olursa pipeline otomatik rollback dener ve işi kırmızıya çeker.
+
+İlk kurulumda henüz CI artifact yoksa bir kez `build_from_source` kullanabilirsiniz; sonraki normale `ci_artifact` dönün.
 
 ---
 
-## Dokunulmayan dosyalar / Files you do not edit
+## Dokunulmayan dosyalar
 
-Aşağıdaki dosyalar şablon tarafından yönetilir; **değiştirmeyin:**
+Şunları düzenlemeyin — proje bilgisi YML satırına yazılmaz:
 
 - `continuous-integration.yml`
 - `reusable-dotnet-build.yml`
 - `production-deploy.yml`
 - `production-rollback.yml`
-- `pipeline.sh`
-- `ssh-remote.sh`
-- `verify-health.sh`
-
-Tüm proje bilgileri yalnızca **GitHub Variables / Secrets** üzerinden okunur.
+- `pipeline.sh`, `ssh-remote.sh`, `verify-health.sh`
 
 ---
 
-## Hızlı kontrol listesi / Quick checklist
+## Hızlı kontrol listesi
 
-- [ ] `SERVICES` variable tanımlı ve doğru formatta
-- [ ] `DEPLOY_TARGET` ayarlı (`local` veya `remote`)
-- [ ] `RUNNER_LABEL` runner etiketiyle eşleşiyor
-- [ ] `production` ortamı oluşturuldu, required reviewers eklendi
-- [ ] (`remote` için) `SSH_PRIVATE_KEY` secret yapıştırıldı
-- [ ] (`remote` için) `SSH_KNOWN_HOSTS` variable dolduruldu
-- [ ] (`remote` için) Sunucuda sudoers yapılandırıldı
-- [ ] Host kurulum scripti çalıştırıldı
-- [ ] İlk CI yeşil
+### Ortak
+- [ ] Template → yeni repo; `templates/` kökte
+- [ ] `SERVICES` doğru formatta
+- [ ] `production` environment: required reviewers + prevent self-review + `main` only
+- [ ] Continuous Integration en az bir kez yeşil
+- [ ] Production Deploy açıklama ile tetiklendi / onaylandı
+
+### Remote ek checklist
+- [ ] Sunucuda `deploy` kullanıcısı + `authorized_keys`
+- [ ] `deploy ALL=(ALL) NOPASSWD: ALL` doğrulandı (`sudo -n true`)
+- [ ] `rsync` (+ .NET) sunucuda kurulu
+- [ ] Variables: `DEPLOY_TARGET=remote`, `SSH_HOST`, `SSH_USER`, `RUNNER_LABEL=ubuntu-latest`
+- [ ] Variable: `SSH_KNOWN_HOSTS` = `ssh-keyscan` çıktısı
+- [ ] Secret: `SSH_PRIVATE_KEY` = private key tam metin (BEGIN/END)
+- [ ] `SERVICES` health_url = `http://<sunucu-ip>:port` (127.0.0.1 değil)
+- [ ] `setup-remote-host.sh` bir kez çalıştı

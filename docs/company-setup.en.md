@@ -1,165 +1,269 @@
 # Company Setup Guide — dotnet-cicd-template
 
-**EN:** This guide lists **all configuration steps in one place** to adapt `dotnet-cicd-template` to your project. You do not touch any YML file; all project values are entered via the GitHub UI as Variables and Secrets.
+This guide is for someone who has never seen the project. You do not edit YML files. All configuration is done in the GitHub UI (Variables / Secrets / Environments) plus a one-time host setup.
 
-**TR:** Bu rehber, `dotnet-cicd-template`'i kendi projenize uyarlamak için gereken **tüm yapılandırma adımlarını tek bir yerde** listeler. Hiçbir YML dosyasına dokunmazsınız; tüm proje bilgileri GitHub arayüzü üzerinden Variables ve Secrets olarak girilir.
+Turkish version: [`company-setup.tr.md`](./company-setup.tr.md)
+
+---
+
+## Which path are you on?
+
+| Path | When | Follow |
+|---|---|---|
+| **Local** | Runner and app on the **same** machine | Steps 1 → 2 (local vars) → 3 (optional `APP_ENV`) → 4 → 5 Local → 6 |
+| **Remote** | App on a separate Linux server; runner is GitHub `ubuntu-latest` | Steps 1 → **Server prep (required)** → 2 (remote vars) → 3 (SSH secret) → 4 → 5 Remote → 6 |
+
+Everything below for **remote** is written explicitly in this file:
+
+1. Server `deploy` user + `NOPASSWD: ALL`
+2. `SSH_PRIVATE_KEY` secret (ed25519, no passphrase, including BEGIN/END)
+3. `SSH_KNOWN_HOSTS` variable (`ssh-keyscan` output)
+4. `DEPLOY_TARGET=remote`, `SSH_HOST`, `SSH_USER`, `RUNNER_LABEL=ubuntu-latest`
+5. Environments → `production` + required reviewers
 
 ---
 
 ## Step 1 — Create the repo
 
-1. Go to [github.com/Dedmoo/dotnet-cicd-template](https://github.com/Dedmoo/dotnet-cicd-template).
-2. Click **Use this template → Create a new repository**.
-3. In the new repo, move the contents of the `templates/` folder to the **root** (`.github/` and `scripts/` must be at the root).
+1. Open [github.com/Dedmoo/dotnet-cicd-template](https://github.com/Dedmoo/dotnet-cicd-template).
+2. **Use this template → Create a new repository**.
+3. Move the contents of `templates/` to the **repo root** (`.github/` and `scripts/` must be at root). Keep your .NET project in the same root (`src/...`).
 
-> Expected tree:
-> ```
-> repo-root/
-> ├── .github/
-> │   ├── actions/build-test/action.yml
-> │   └── workflows/
-> │       ├── continuous-integration.yml
-> │       ├── reusable-dotnet-build.yml
-> │       ├── production-deploy.yml
-> │       └── production-rollback.yml
-> └── scripts/
->     ├── pipeline.sh
->     ├── ssh-remote.sh
->     ├── verify-health.sh
->     ├── setup-host.sh
->     └── setup-remote-host.sh
-> ```
+Expected tree:
+
+```
+repo-root/
+├── .github/
+│   ├── actions/build-test/action.yml
+│   ├── dependabot.yml
+│   └── workflows/
+│       ├── continuous-integration.yml
+│       ├── reusable-dotnet-build.yml
+│       ├── production-deploy.yml
+│       └── production-rollback.yml
+├── scripts/
+│   ├── pipeline.sh
+│   ├── ssh-remote.sh
+│   ├── verify-health.sh
+│   ├── setup-host.sh
+│   └── setup-remote-host.sh
+└── src/   # your .NET code
+```
+
+---
+
+## Remote server prep (remote only — BEFORE Step 2)
+
+Do this **once on the target Linux server** as root/admin. Skip it and deploy fails with `Permission denied` or `sudo: a password is required`.
+
+### U1 — `deploy` user + SSH public key
+
+On your machine (or a secure host), generate a key:
+
+```bash
+ssh-keygen -t ed25519 -C "deploy" -N "" -f deploy_key
+# deploy_key      → later GitHub Secret: SSH_PRIVATE_KEY
+# deploy_key.pub  → added on the server
+```
+
+On the server:
+
+```bash
+sudo adduser --disabled-password --gecos "" deploy
+sudo mkdir -p /home/deploy/.ssh
+sudo chmod 700 /home/deploy/.ssh
+# add the public key (paste the single line):
+sudo tee /home/deploy/.ssh/authorized_keys < deploy_key.pub
+sudo chmod 600 /home/deploy/.ssh/authorized_keys
+sudo chown -R deploy:deploy /home/deploy/.ssh
+```
+
+### U2 — Passwordless `sudo` (`NOPASSWD: ALL`) — required
+
+The pipeline runs every host step as `sudo bash -c "..."`. A narrow command allow-list (`systemctl`, `mkdir`, …) is **not enough** and will break deploy. Add:
+
+```bash
+echo 'deploy ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/deploy
+sudo chmod 440 /etc/sudoers.d/deploy
+sudo visudo -cf /etc/sudoers.d/deploy
+```
+
+Verify on the server:
+
+```bash
+sudo -u deploy sudo -n true && echo "sudo OK"
+```
+
+This is full `sudo`. To keep risk lower: use the `deploy` user only on this deployment host; do not reuse it for other tasks.
+
+### U3 — Packages on the server
+
+Typical requirements for deploy and health checks:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y rsync curl
+# .NET runtime/SDK — the version your project targets (e.g. 8)
+```
+
+Firewall: keep the SSH port (usually 22) open to the runner; open application ports from `SERVICES` `health_url` so the runner can reach them for health checks.
+
+### U4 — Capture `SSH_KNOWN_HOSTS`
+
+From your machine (or anywhere that can reach the host):
+
+```bash
+ssh-keyscan -p 22 <SERVER-IP-OR-HOSTNAME>
+```
+
+Copy the **entire** output; paste it as a GitHub Variable in Step 2.
 
 ---
 
 ## Step 2 — Repository Variables
 
-**GitHub:** Settings → Secrets and variables → Actions → **Variables** tab → **New repository variable**
+**GitHub:** Settings → Secrets and variables → Actions → **Variables** → **New repository variable**
 
-| Variable | Required | Example value | Description |
-|---|---|---|---|
-| `SERVICES` | **Yes** | `web\|src/Web/Web.csproj\|/opt/myapp-web\|myapp-web\|http://127.0.0.1:5001` | Service list; each line `name\|csproj\|deploy_dir\|service_name\|health_url`. For multiple services, each on its own line. |
-| `DEPLOY_TARGET` | No | `local` or `remote` | Default: `local`. Use `local` when the runner is the target host; use `remote` to deploy to a separate server via SSH. |
-| `RUNNER_LABEL` | No | `self-hosted` or `ubuntu-latest` | Runner label. `self-hosted` for local mode; usually `ubuntu-latest` for remote mode. |
-| `ARTIFACT_NAME` | No | `app-publish` | CI artifact name. Default is `app-publish`; no change needed for a single-service setup. |
-| `SSH_HOST` | Remote | `192.168.1.100` or `myserver.com` | IP or hostname of the target server. Required only when `DEPLOY_TARGET=remote`. |
-| `SSH_USER` | Remote | `deploy` | SSH username. Required only when `DEPLOY_TARGET=remote`. |
-| `SSH_PORT` | No | `22` | SSH port. Default is `22`. |
-| `SSH_KNOWN_HOSTS` | Recommended | `myserver.com ssh-ed25519 AAAA...` | Host key line of the server. Paste the output of `ssh-keyscan -p 22 <SSH_HOST>` here. If left empty, the pipeline runs `ssh-keyscan` once on the first step; if provided, no scan happens at all (safer on modern servers with `PerSourcePenalties`). |
+### Required for every path
 
-### Multi-line `SERVICES` example
+| Variable | Example | Description |
+|---|---|---|
+| `SERVICES` | see below | One line each: `name\|csproj\|deploy_dir\|service_name\|health_url` |
+
+Single-service example:
+
+```
+web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001
+```
+
+Two services:
 
 ```
 web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001
 api|src/Api/Api.csproj|/opt/myapp-api|myapp-api|http://127.0.0.1:5002
 ```
 
-Paste each service on a separate line in the GitHub Variables text field.
+**For remote:** do **not** use `127.0.0.1` in `health_url`. The runner is on another machine — use the server IP/hostname, e.g. `http://203.0.113.10:5001`.
+
+### Local extras
+
+| Variable | Value |
+|---|---|
+| `DEPLOY_TARGET` | `local` (or leave empty; default is local) |
+| `RUNNER_LABEL` | `self-hosted` (whatever your runner label is) |
+
+### Remote — fill this set
+
+| Variable | Required | Value |
+|---|---|---|
+| `DEPLOY_TARGET` | **Yes** | `remote` |
+| `SSH_HOST` | **Yes** | Server IP or hostname |
+| `SSH_USER` | **Yes** | `deploy` (the user from U1) |
+| `SSH_PORT` | No | Default `22` |
+| `SSH_KNOWN_HOSTS` | **Strongly recommended** | Full U4 `ssh-keyscan` output |
+| `RUNNER_LABEL` | **Yes (recommended)** | `ubuntu-latest` |
+| `ARTIFACT_NAME` | No | Default `app-publish` — if you change it, CI and deploy stay in sync |
+
+Empty `SSH_KNOWN_HOSTS` can still work (the pipeline scans once); filling it avoids connection resets on modern SSH servers (`PerSourcePenalties`).
 
 ---
 
 ## Step 3 — Repository Secrets
 
-**GitHub:** Settings → Secrets and variables → Actions → **Secrets** tab → **New repository secret**
+**GitHub:** Settings → Secrets and variables → Actions → **Secrets** → **New repository secret**
 
-| Secret | Required | What to paste |
+| Secret | When | What to paste |
 |---|---|---|
-| `SSH_PRIVATE_KEY` | Remote | A **passphrase-free** SSH private key in `ed25519` format. Paste the full text starting with `-----BEGIN OPENSSH PRIVATE KEY-----` and ending with `-----END OPENSSH PRIVATE KEY-----`. Ensure there are no missing lines or extra spaces. |
-| `APP_ENV` | No | `KEY=VALUE` lines in `.env` format. Injected into each service as `.env` at deploy time. Example: `DATABASE_URL=postgresql://...` or `API_KEY=abc123`. |
+| `SSH_PRIVATE_KEY` | **required for remote** | The **entire** `deploy_key` file: `-----BEGIN OPENSSH PRIVATE KEY-----` … `-----END OPENSSH PRIVATE KEY-----`. Passphrase-free (`-N ""`) ed25519. Missing lines = `invalid format`. |
+| `APP_ENV` | Optional (local + remote) | `KEY=VALUE` lines (`.env`). Written to each service as `.env` at deploy. |
 
-### Generating an SSH key
-
-```bash
-ssh-keygen -t ed25519 -C "deploy" -N "" -f deploy_key
-# deploy_key      → paste into SSH_PRIVATE_KEY secret
-# deploy_key.pub  → append to ~/.ssh/authorized_keys on the server
-```
+Never put the private key in Variables — Secrets only.
 
 ---
 
-## Step 4 — `production` Environment
+## Step 4 — `production` Environment (required)
 
-**GitHub:** Settings → **Environments** → **New environment** → name it `production` → **Configure**
+**GitHub:** Settings → **Environments** → **New environment** → name it exactly `production`
 
 | Setting | Value | Why |
 |---|---|---|
-| **Required reviewers** | Add at least 1 person | Prevents unapproved production deploys |
-| **Prevent self-review** | Enabled | The person who triggers a deploy cannot approve their own deployment |
-| **Deployment branches** | Select the `main` branch | Prevents accidentally deploying from a feature branch |
-| **Wait timer** | 5–15 min (optional) | Provides a cancellation window after approval |
+| **Required reviewers** | At least 1 person | No unapproved production deploy |
+| **Prevent self-review** | Enabled | Triggering actor cannot approve their own deploy |
+| **Deployment branches** | `main` only | No accidental feature-branch production deploys |
+| **Wait timer** | 5–15 min (optional) | Cancel window after approval |
 
-> Before approving, the reviewer should check the **prepare** job summary (description, commit message, SHA) on the Actions run page. "The reviewer must not approve without first reading the prepare summary."
+Deploy and Rollback bind to this environment. Before approving, read the **`prepare` summary** on the Actions run page (description, commit subject, SHA).
 
 ---
 
-## Step 5 — Host Setup (One-time)
+## Step 5 — Host setup (one-time)
 
-### Local (`DEPLOY_TARGET=local`)
+### Local
 
-When the runner and the target host are the same machine, run **once** on that machine:
+Runner = host machine:
 
 ```bash
 sudo SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001" \
      bash scripts/setup-host.sh
 ```
 
-The script only creates and enables a systemd unit for each service (deploy directories are created by the pipeline during the first deploy). Services start after the first successful deploy.
+Only creates/enables systemd units. Directories are created on first deploy; services stay up after the first successful deploy.
 
-### Remote (`DEPLOY_TARGET=remote`)
+### Remote
 
-Setup is performed **via SSH** from the deploy runner to the target server:
+**Finish U1–U2 first** (user + sudoers). Then, from a machine that can SSH and has the private key:
 
 ```bash
-SSH_HOST=192.168.1.100 \
+SSH_HOST=<SERVER-IP> \
 SSH_USER=deploy \
 SSH_PORT=22 \
 SSH_PRIVATE_KEY="$(cat deploy_key)" \
-SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001" \
+SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://<SERVER-IP>:5001" \
 bash scripts/setup-remote-host.sh
 ```
 
-**sudoers requirement on the server:** The pipeline runs each deployment step (`mkdir`, `cp`, `rm`, `chown`, `mv`, `chmod`, `systemctl`) as a single compound command via `sudo bash -c "..."`. A narrow per-command whitelist therefore **does not work**; the deploy user needs full passwordless `sudo`:
-
-```
-deploy ALL=(ALL) NOPASSWD: ALL
-```
-
-**Note:** This is full `sudo`. For a tighter setup, dedicate the `deploy` user to this deployment server only; do not reuse it for other tasks.
+`health_url` in `SERVICES` must use the same server IP here. This script runs `setup-host.sh` on the remote host (systemd units).
 
 ---
 
 ## Step 6 — First CI and Deploy
 
-1. Push to the `main` branch → `continuous-integration.yml` triggers automatically → confirm it is green.
-2. Actions → **Production Deploy** → **Run workflow** → enter a description, leave **source: `ci_artifact`** selected → **Run workflow**.
-3. The reviewer checks the prepare summary and approves → deploy begins.
+1. Push to `main` → **Continuous Integration** is green in Actions.
+2. Actions → **Production Deploy** → **Run workflow** → enter a required description → leave source `ci_artifact` → Run.
+3. Reviewer reads the `prepare` summary and approves → deploy runs.
+4. If health fails, the pipeline auto-rollbacks and marks the job failed.
+
+If there is no CI artifact yet (very first setup), use `build_from_source` once; then return to `ci_artifact`.
 
 ---
 
 ## Files you do not edit
 
-The following files are managed by the template; **do not modify them:**
+Do not edit these — project values are not written into YML lines:
 
 - `continuous-integration.yml`
 - `reusable-dotnet-build.yml`
 - `production-deploy.yml`
 - `production-rollback.yml`
-- `pipeline.sh`
-- `ssh-remote.sh`
-- `verify-health.sh`
-
-All project values are read exclusively from **GitHub Variables / Secrets**.
+- `pipeline.sh`, `ssh-remote.sh`, `verify-health.sh`
 
 ---
 
 ## Quick checklist
 
-- [ ] `SERVICES` variable defined and correctly formatted
-- [ ] `DEPLOY_TARGET` set (`local` or `remote`)
-- [ ] `RUNNER_LABEL` matches the runner label
-- [ ] `production` environment created, required reviewers added
-- [ ] (remote) `SSH_PRIVATE_KEY` secret pasted
-- [ ] (remote) `SSH_KNOWN_HOSTS` variable filled in
-- [ ] (remote) sudoers configured on the server
-- [ ] Host setup script executed
-- [ ] First CI run is green
+### Shared
+- [ ] Template → new repo; `templates/` at root
+- [ ] `SERVICES` correctly formatted
+- [ ] `production` environment: required reviewers + prevent self-review + `main` only
+- [ ] Continuous Integration green at least once
+- [ ] Production Deploy triggered with a description / approved
+
+### Remote extras
+- [ ] Server has `deploy` user + `authorized_keys`
+- [ ] `deploy ALL=(ALL) NOPASSWD: ALL` verified (`sudo -n true`)
+- [ ] `rsync` (+ .NET) installed on the server
+- [ ] Variables: `DEPLOY_TARGET=remote`, `SSH_HOST`, `SSH_USER`, `RUNNER_LABEL=ubuntu-latest`
+- [ ] Variable: `SSH_KNOWN_HOSTS` = `ssh-keyscan` output
+- [ ] Secret: `SSH_PRIVATE_KEY` = full private key text (BEGIN/END)
+- [ ] `SERVICES` health_url = `http://<server-ip>:port` (not `127.0.0.1`)
+- [ ] `setup-remote-host.sh` run once
