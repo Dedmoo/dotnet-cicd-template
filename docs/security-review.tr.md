@@ -2,7 +2,8 @@
 
 **Kapsam:** `SV&V (Software Verification & Validation)` perspektifinden manuel kod incelemesi.  
 **Tarih:** 2026-07-08  
-**İncelenen dosyalar:** `production-deploy.yml`, `production-rollback.yml`, `continuous-integration.yml`, `reusable-dotnet-build.yml`, `pipeline.sh`, `ssh-remote.sh`, `verify-health.sh`, `build-test/action.yml`  
+**İncelenen dosyalar:** `production-deploy.yml`, `production-rollback.yml`, `continuous-integration.yml`, `reusable-dotnet-build.yml`, `pipeline.sh`, `ssh-remote.sh`, `verify-health.sh`, `setup-host.sh`, `build-test/action.yml`  
+**Mimari:** Blue-green (nginx + Unix socket, `cicd` grubu)  
 **Yöntem:** Statik analiz / kod okuma — çalışan ortam testi yapılmamıştır.  
 **Not:** Bu rapor yalnızca bulgular içerir; **raporda onay olmadan hiçbir kod değişikliği yapılmayacaktır.**
 
@@ -15,6 +16,7 @@
 | INJ-01 | `remote_sudo` komut enjeksiyonu (SERVICES alanları) | **ORTA** | `pipeline.sh` | **GİDERİLDİ** |
 | TMP-01 | Uzak geçici dosya yolu tahmin edilebilir (`/tmp/cicd-env-$$`) | **DÜŞÜK** | `pipeline.sh` | **GİDERİLDİ** |
 | PIN-01 | Action sürümlerinde SHA yerine etiket kullanımı | **DÜŞÜK-ORTA** | Tüm workflow'lar | **GİDERİLDİ** (Dependabot) |
+| NX-01 | nginx socket izin modeli (cicd grubu, UMask) | **BİLGİ** | `setup-host.sh` | Kabul edilebilir (tasarım gereği) |
 | FORK-01 | `pull_request` tetikleyicisi + self-hosted runner | **DÜŞÜK** | `continuous-integration.yml` | Açık (private repo kabul edilebilir) |
 | CLEANUP-01 | SSH anahtar dosyası `SIGKILL`'de temizlenmiyor | **BİLGİ** | `ssh-remote.sh` | Açık (standart kısıt) |
 
@@ -26,15 +28,15 @@ Tespit edilen **yüksek önem** bulgusu yoktur.
 
 ### INJ-01 — `remote_sudo` Komut Enjeksiyonu ✅ GİDERİLDİ
 **Önem:** ORTA  
-**Dosya/Satır:** `pipeline.sh`, `target_backup_one`, `target_publish_dir`, `target_restart_one`, `target_rollback_one`
+**Dosya/Satır:** `pipeline.sh`, `target_publish_dir`, `target_write_env_one`, `target_restart_one`
 
 **Kanıt:**
 ```bash
-# pipeline.sh – target_backup_one (satır ~60)
-remote_sudo "if [ -d '$dd' ]; then rm -rf '${dd}.previous'; cp -a '$dd' '${dd}.previous'; fi"
+# pipeline.sh – target_publish_dir
+remote_sudo "mkdir -p '$dest'"
 
-# pipeline.sh – target_restart_one (satır ~119)
-remote_sudo "systemctl restart '${svc}'"
+# pipeline.sh – target_restart_one
+remote_sudo "systemctl restart '${unit}'"
 ```
 
 `$dd` (deploy_dir) ve `$svc` (service_name) değerleri `SERVICES` repo değişkeninden gelir. `remote_sudo` içinde bu değerler tek-tırnak içine yerleştirilir; ancak `$dd` veya `$svc` değeri tek-tırnak (`'`) içeriyorsa bash string'i parçalanır ve enjekte edilen komut `sudo bash -c` ile çalışır.
@@ -122,6 +124,22 @@ remote_sudo "mv '$tmp' '${dd}/.env' && chmod 600 '${dd}/.env' && ..."
 
 ---
 
+### NX-01 — nginx Socket İzin Modeli
+**Önem:** BİLGİ  
+**Dosya:** `setup-host.sh`
+
+**Model:** Her blue/green systemd birimi `Group=cicd`, `UMask=0007` ile çalışır. Kestrel bu ayarlarla Unix socket'i `0660 root:cicd` olarak oluşturur. nginx kullanıcısı (`www-data`/`nginx`) `usermod -aG cicd` ile `cicd` grubuna eklenmiştir; dolayısıyla nginx socket'e bağlanabilir. Diğer sistem kullanıcıları grupta değilse sokete erişemez.
+
+**Değerlendirme:**
+- `cicd` grubu yalnızca nginx ve .NET servis kullanıcılarını içerir; dar kapsam iyi uygulama.
+- `RuntimeDirectoryPreserve=yes` iki renk aynı anda çalışırken `/run/cicd/` silinmesini önler.
+- Sistemd `RuntimeDirectory=cicd` her unit başlatılışında `/run/cicd/` sahipliğini `root` olarak ayarlar; grub `cicd` bırakır (mode `0750`); bu tasarım socket erişimini kontrollü tutar.
+- **Potansiyel öneri:** `Group=cicd` birimlerin *aynı* `cicd` grubunu kullanması socket erişimini `nginx` ile paylaşır ancak sistemdeki başka `cicd` üyelerini de dahil eder; bu kullanıcı sayısını mümkün olduğunca az tutarak yönetilebilir kılar.
+
+**Karar:** Tasarım gereği kabul edilebilir; dokümantasyonda belirtilmiştir.
+
+---
+
 ### CLEANUP-01 — SSH Anahtar Dosyası `SIGKILL`'de Temizlenmiyor
 **Önem:** BİLGİ  
 **Dosya/Satır:** `ssh-remote.sh`, satır 123
@@ -154,8 +172,9 @@ trap ssh_remote_cleanup EXIT
 | Gizli bilgi sızıntısı yok | Hiçbir `echo` / `cat` komutu secret değerleri loglara yazmıyor |
 | Onay kapısı | `environment: production` + required reviewers + prevent self-review |
 | Eşzamanlılık kontrolü | `concurrency: group: deploy-${{ github.repository }}, cancel-in-progress: false` |
-| Rollback fail-safe | Health check başarısız → otomatik rollback → `exit 1` |
+| Blue-green fail-safe | Health socket geçemezse nginx geçişi yapılmaz; canlı etkilenmez; job başarısız |
 | Validate adımı | Deploy başlangıcında SERVICES, SSH değişkenleri doğrulanıyor |
+| Socket izin modeli | `cicd` grubu, `UMask=0007` → socket `0660`; yalnızca nginx erişir |
 
 ---
 
@@ -167,8 +186,9 @@ trap ssh_remote_cleanup EXIT
 - **TMP-01 (DÜŞÜK):** Uzak geçici dosya `mktemp` ile rassal isim alıyor.
 - **PIN-01 (DÜŞÜK-ORTA, kısmi):** `dependabot.yml` action güncellemelerini otomatik izler. **Not:** Bu tam bir azaltma değildir — action'lar hâlâ `@v4` etiket ile pinlenmiştir; SLSA düzeyinde katı güvenlik için tam commit SHA pinleme ayrıca yapılmalıdır. Dependabot yalnızca güncelleme PR'ları önerir.
 
-**Açık bırakılan (kabul edilebilir) bulgular:**
+**Açık / kabul edilebilir bulgular:**
 
+- **NX-01 (BİLGİ):** nginx socket izin modeli `cicd` grubu + UMask tasarımı kabul edilebilir; `cicd` grubunu dar tutun.
 - **FORK-01 (DÜŞÜK):** `pull_request` + self-hosted runner riski yalnızca **public** repo'da anlamlıdır. Bu şablon private proje repoları için tasarlanmıştır; public kullanımda PR'lar için ek bir onay kapısı önerilir.
 - **CLEANUP-01 (BİLGİ):** `SIGKILL` sonrası geçici SSH anahtar dosyası bilinen bir kısıttır; `chmod 600` ve izole runner çalışma alanı ile pratik risk düşüktür.
 

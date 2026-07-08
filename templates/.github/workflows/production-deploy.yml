@@ -1,14 +1,23 @@
 name: Production Deploy
 
-# Sürekli Dağıtım / Continuous Deployment
-# Elle tetiklenir, production onayi ister, saglik kontrolu ve otomatik geri alma icerir.
-# Manually triggered, requires production approval, includes health check and auto-rollback.
+# Sürekli Dağıtım — Blue-Green / Continuous Deployment — Blue-Green
+#
+# Blue-green modeli: yeni surum IDLE renge yazilir; saglik kontrolundan gecince
+# nginx graceful reload ile AKTIF rene gecer. Eski renk hic kapanmaz — anlik
+# rollback hedefidir. Saglik gecemediyse gecis YAPILMAZ; canli etkilenmez.
+#
+# Blue-green model: the new release is written to the IDLE color; on health pass
+# nginx graceful-reloads to make it ACTIVE. The old color never goes down — it
+# is an instant rollback target. If health fails the switch is NOT made; live
+# traffic is never affected.
 #
 # BU DOSYAYI DUZENLEMENIZE GEREK YOK. Tum proje bilgileri repo Variables/Secrets'tan okunur.
 # NO NEED TO EDIT THIS FILE. All project values are read from repo Variables/Secrets.
 #   Settings > Secrets and variables > Actions
 #   - Variable  DEPLOY_TARGET  : local (varsayilan) veya remote
 #   - Variable  SERVICES       : name|csproj|deploy_dir|service_name|health_url
+#                                health_url = nginx'in dinledigi public port + health path
+#                                health_url = public port nginx listens on + health path
 #   - Variable  RUNNER_LABEL   : runner etiketi (remote icin ubuntu-latest onerilir)
 #   - Variable  SSH_HOST       : uzak sunucu IP/hostname (remote)
 #   - Variable  SSH_USER       : SSH kullanicisi (remote)
@@ -129,7 +138,7 @@ jobs:
       - name: Deploy ozeti / summary
         run: |
           {
-            echo "## Deploy"
+            echo "## Deploy (Blue-Green)"
             echo "- Yapan / by: **${{ github.actor }}**"
             echo "- Aciklama / description: **${{ inputs.description }}**"
             echo "- Commit: \`${{ needs.prepare.outputs.commit_hash }}\` — ${{ needs.prepare.outputs.commit_subject }}"
@@ -138,6 +147,9 @@ jobs:
             if [ "$DEPLOY_TARGET" = "remote" ]; then
               echo "- Hedef / target: **${SSH_USER}@${SSH_HOST}:${SSH_PORT}**"
             fi
+            echo ""
+            echo "> Yeni surum IDLE renge yazilir. Saglik gecince nginx trafiklerini cevirmeden (graceful reload) yeni surumu aktiflestirir."
+            echo "> The new release is written to the IDLE color. On health pass nginx makes it active via graceful reload."
           } >> "$GITHUB_STEP_SUMMARY"
 
       # DUZENLE / EDIT (opsiyonel): veritabani/altyapi hazirligi
@@ -178,22 +190,17 @@ jobs:
           gh run download "$RUN_ID" -R "${{ github.repository }}" -n "$ARTIFACT_NAME" -D "$ROOT"
           echo "ARTIFACT_ROOT=$ROOT" >> "$GITHUB_ENV"
 
-      - name: Mevcut surumu yedekle / back up current release
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: bash scripts/pipeline.sh backup
-
-      - name: Yayinla (kaynaktan) / publish (from source)
-        if: inputs.source == 'build_from_source'
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: bash scripts/pipeline.sh publish-source
-
-      - name: Yayinla (artifact) / publish (artifact)
+      - name: IDLE renge yayinla (artifact) / publish to IDLE color (artifact)
         if: inputs.source == 'ci_artifact'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh deploy-artifacts
+
+      - name: IDLE renge yayinla (kaynaktan) / publish to IDLE color (from source)
+        if: inputs.source == 'build_from_source'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: bash scripts/pipeline.sh publish-source
 
       - name: Gizli ortami yaz / write secret environment
         env:
@@ -209,27 +216,38 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh write-info
 
-      - name: Servisleri yeniden baslat / restart services
+      - name: IDLE rengi yeniden baslat / restart IDLE color service
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh restart
 
-      - name: Saglik kontrolu / health check
+      - name: Saglik kontrolu (socket) / health check via socket
         id: health
-        continue-on-error: true
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh health
 
-      - name: Basarisizsa otomatik geri al / auto-rollback on failure
-        if: steps.health.outcome == 'failure'
+      - name: Trafigi yeni surume gec (nginx reload) / switch traffic to new version
+        if: steps.health.outcome == 'success'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          bash scripts/pipeline.sh rollback
-          bash scripts/pipeline.sh health || true
-          echo "- Otomatik rollback yapildi / auto-rollback performed" >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/pipeline.sh switch
+          echo "- Gecis basarili / switch successful: IDLE renk artik AKTIF / IDLE color is now ACTIVE" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Deploy basarisiz / deploy failed
+      - name: Saglik basarisiz — canli etkilenmedi / health failed — live not affected
         if: steps.health.outcome == 'failure'
-        run: exit 1
+        run: |
+          {
+            echo "## Deploy Basarisiz / Deploy Failed"
+            echo ""
+            echo "IDLE rengin saglik kontrolu gecilemedi. nginx gecisi YAPILMADI."
+            echo "Health check of the IDLE color failed. nginx switch was NOT made."
+            echo ""
+            echo "**Canli trafik etkilenmedi / Live traffic was NOT affected.**"
+            echo ""
+            echo "Yapilabilecekler / Next steps:"
+            echo "- IDLE rengin loglarini inceleyin / inspect IDLE color logs"
+            echo "- Sorunu duzeltin, yeniden deploy yayin / fix the issue, redeploy"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1

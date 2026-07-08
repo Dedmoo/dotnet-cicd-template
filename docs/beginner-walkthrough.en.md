@@ -20,12 +20,12 @@ In short:
 
 1. When code is pushed to GitHub it is **built and tested automatically**.
 2. An authorized person **approves** going live.
-3. After approval the new version is **published to the remote server** — users do not run a separate “reset / restart ceremony”; their next requests (e.g. refresh) get the updated version.
-4. If the new version does not come up healthy, the system **tries to return to the previous version**.
+3. After approval the new version is **written to the idle channel** on the server; once health passes, nginx **silently** routes traffic to it — users notice nothing; their next request gets the updated version. This is called “blue-green” deployment.
+4. If the new version fails the health check, the switch is **never made** — live users keep seeing the previous version without any interruption.
 
 Your job: fill in the settings once. After that: write code → get approval → live updates.
 
-> Technical note (for the curious): Under the hood the server process is refreshed briefly. We are not selling “restart” as the product feature. The product goal is quiet, approved updates for users.
+> Technical note (for the curious): The server runs two channels (blue/green); one is always live. The new version is deployed to the idle channel and verified healthy before nginx routes traffic to it. The old channel stays up as an instant rollback target.
 
 ---
 
@@ -158,7 +158,7 @@ You must see `sudo OK`. If not, stop — do not continue.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y rsync curl
+sudo apt-get install -y rsync curl nginx
 ```
 
 Also install the **.NET** version your app needs (whatever your company uses — e.g. .NET 8).
@@ -207,9 +207,9 @@ Meaning (you do not need to memorize this):
 - `src/Web/Web.csproj` = project file to build (use your real path)  
 - `/opt/myapp-web` = folder on the server  
 - `myapp-web` = service name  
-- `http://SERVER_IP:5001` = health check URL  
+- `http://SERVER_IP:5001` = nginx's public port (you may add a health path, e.g. `http://SERVER_IP:5001/health`)  
 
-**Do not** use `http://127.0.0.1:5001` for remote. It will fail. Use the server IP.
+> The pipeline checks health via **socket** and ignores the IP. What matters is the port (nginx) and path (health endpoint).
 
 For multiple services: press Enter in the Variable box for another line.
 
@@ -257,7 +257,7 @@ bash scripts/setup-remote-host.sh
 
 On Windows PowerShell without `bash`, use WSL or Git Bash.
 
-If it finishes with no error, systemd units are on the server. The app folder may still be empty until the first deploy.
+If it finishes with no error, nginx is configured and systemd units are on the server. The app folder may still be empty until the first deploy.
 
 ---
 
@@ -283,7 +283,7 @@ Then:
 
 1. The run opens → **prepare** turns green first (writes a summary).  
 2. The reviewer checks Summary / the approval screen → **Approve**.  
-3. Deploy finishes → on failure it may auto-rollback.
+3. Deploy finishes → on failure the nginx switch was not made; live was unaffected. Fix and retrigger.
 
 Success: your app answers at the `health_url`.
 
@@ -297,7 +297,7 @@ Success: your app answers at the `health_url`.
 | `sudo: a password is required` | Section 2.3 sudoers not done |
 | `Host key verification failed` | Empty/wrong `SSH_KNOWN_HOSTS` |
 | `invalid format` / libcrypto | Incomplete key pasted into the Secret |
-| Health fail but SSH works | `127.0.0.1` in `SERVICES` or firewall closed |
+| Health fail but SSH works | nginx not installed or `setup-remote-host.sh` not run |
 | Artifact not found | CI must be green first — or use `build_from_source` once |
 
 Longer table: [`README.md`](../README.md) troubleshooting section.
@@ -312,7 +312,7 @@ Longer table: [`README.md`](../README.md) troubleshooting section.
 - [ ] GitHub Variables set  
 - [ ] Secret `SSH_PRIVATE_KEY` set  
 - [ ] Environment `production` + reviewer  
-- [ ] `setup-remote-host.sh` ran  
+- [ ] `setup-remote-host.sh` ran (nginx + systemd units created)  
 - [ ] Continuous Integration green  
 - [ ] Production Deploy approved and successful  
 

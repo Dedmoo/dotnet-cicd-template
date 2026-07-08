@@ -1,8 +1,8 @@
 # CI/CD Pipeline Blueprint
 
-**TR:** Projeden bağımsız, kopyala-yapıştır bir CI/CD boru hattı şablonu. Kendinden barındırmalı (self-hosted) bir GitHub Actions çalıştırıcısı üzerinde; otomatik derleme/test, onaya bağlı üretim dağıtımı, sağlık kontrolü ve hata durumunda otomatik geri alma sağlar. Herhangi bir .NET projesine tek bir `SERVICES` bloğu doldurularak dakikalar içinde uyarlanır.
+**TR:** Projeden bağımsız, kopyala-yapıştır bir CI/CD boru hattı şablonu. Kendinden barındırmalı (self-hosted) bir GitHub Actions çalıştırıcısı üzerinde; otomatik derleme/test, onaya bağlı üretim dağıtımı, **sıfır kesintili blue-green dağıtım**, sağlık kontrolü ve anında geri alma sağlar. Herhangi bir .NET projesine tek bir `SERVICES` bloğu doldurularak dakikalar içinde uyarlanır.
 
-**EN:** A project-agnostic, copy-paste CI/CD pipeline template. On a self-hosted GitHub Actions runner it provides automatic build/test, approval-gated production deployment, health checks and automatic rollback on failure. It adapts to any .NET project in minutes by filling in a single `SERVICES` block.
+**EN:** A project-agnostic, copy-paste CI/CD pipeline template. On a self-hosted GitHub Actions runner it provides automatic build/test, approval-gated production deployment, **zero-downtime blue-green deploys**, health checks and instant rollback. It adapts to any .NET project in minutes by filling in a single `SERVICES` block.
 
 **TR — İlk kez mi kuruyorsunuz?** Öğrenmeye gerek yok: [`docs/beginner-walkthrough.tr.md`](./docs/beginner-walkthrough.tr.md)  
 **EN — First time setup?** No theory needed: [`docs/beginner-walkthrough.en.md`](./docs/beginner-walkthrough.en.md)
@@ -40,12 +40,12 @@
 | **Yapı çıktısı (artifact)** | Testten geçen çıktı saklanır, deploy'da yeniden kullanılır / Tested output is stored and reused at deploy |
 | **Build-once, deploy-many** | Test edilen ile canlıya çıkan birebir aynı / What is tested equals what ships |
 | **Onaya bağlı deploy** | Üretim için manuel onay kapısı (`production` environment) / Manual approval gate for production |
-| **Sağlık kontrolü** | Deploy sonrası her servisin ayakta olduğu doğrulanır / Post-deploy verification per service |
-| **Otomatik geri alma** | Sağlık başarısızsa önceki sürüme otomatik dönüş / Auto-revert on failed health check |
-| **Manuel geri alma** | Önceki klasör veya belirli commit ile / Via previous folder or a specific commit |
-| **Denetlenebilirlik** | Her dağıtımda kim/ne zaman/hangi commit kaydı / Who/when/which commit recorded per deploy |
+| **Sıfır kesinti (blue-green)** | nginx + Unix socket: yeni sürüm idle renge yazılır; sağlık geçince nginx trafiği çevirir — kullanıcı fark etmez / nginx + Unix socket: new version written to idle color; nginx switches on health pass — users notice nothing |
+| **Sağlık kontrolü (socket)** | Geçiş öncesi idle rengin Unix socketi doğrulanır; başarısızsa nginx çevrilmez, canlı etkilenmez / Idle color Unix socket verified before switch; on failure nginx not switched, live unaffected |
+| **Anında geri alma** | nginx upstream eski renge yeniden yazılır + graceful reload; sıfır kesinti / nginx upstream rewritten to previous color + graceful reload; zero-downtime |
+| **Manuel geri alma** | Önceki renk (anlık, derleme yok) veya belirli commit (idle renge publish + switch) / Previous color (instant, no rebuild) or specific commit (publish to idle + switch) |
+| **Denetlenebilirlik** | Her dağıtımda kim/ne zaman/hangi commit ve hangi renk kaydı / Who/when/which commit and which color recorded per deploy |
 | **Çok servis desteği** | Tek `SERVICES` bloğuyla N servis / N services via one `SERVICES` block |
-| **Atomik güncelleme** | `rsync --delete` ile tutarlı dosya durumu / Consistent files via `rsync --delete` |
 | **Eşzamanlılık koruması** | Çakışan deploy/rollback engellenir / Prevents clashing deploy/rollback |
 | **Köken doğrulama (provenance)** | `ci_artifact`'ın commit'i, deploy commit'i ile birebir eşleşmezse deploy durur / Deploy stops if the artifact's commit does not match the deploy commit |
 | **En az yetki (least privilege)** | İş akışları yalnızca gereken okuma yetkileriyle çalışır / Workflows run with only the minimal read permissions |
@@ -73,15 +73,15 @@ flowchart TB
     APPR -->|reddedildi / rejected| STOP["Durur / Stops"]
     APPR -->|onaylandı / approved| DEP
 
-    subgraph DEP["3. Deploy"]
+    subgraph DEP["3. Deploy — Blue-Green"]
         direction TB
-        D1["build/test VEYA CI artifact"] --> D2["backup -> *.previous"] --> D3["publish (rsync --delete)"] --> D4["write .deploy-info"] --> D5["restart (systemd)"] --> D6["health check"]
+        D1["build/test VEYA CI artifact"] --> D2["publish -> IDLE renk/color"] --> D3["write .deploy-info"] --> D4["restart IDLE unit"] --> D5["health (socket)"]
     end
 
-    D6 --> HC{"sağlıklı mı?<br/>healthy?"}
-    HC -->|Evet / Yes| LIVE["Canlı / Live"]
-    HC -->|Hayır / No| RB["Otomatik rollback + iş başarısız<br/>Auto rollback + job fails"]
-    RB --> PREV["Önceki sürüm canlı<br/>Previous version live"]
+    D5 --> HC{"sağlıklı mı?<br/>healthy?"}
+    HC -->|Evet / Yes| SW["nginx switch (graceful reload)"]
+    SW --> LIVE["Canlı / Live — eski renk ayakta<br/>old color stays up"]
+    HC -->|Hayır / No| NOP["Geçiş YAPILMAZ / switch NOT made<br/>Canlı etkilenmez / live unaffected"]
 ```
 
 ---
@@ -135,12 +135,12 @@ flowchart TB
 | # | Adım / Step | Ne yapar / What it does |
 |---|---|---|
 | 1 | Kaynak hazırlığı / source prep | `ci_artifact` → artifact indir + commit köken doğrulaması / download artifact + commit provenance check · `build_from_source` → derle+test / build+test |
-| 2 | **backup** | Mevcut `/opt/...` dizinlerini `*.previous`'a kopyalar / Copies current dirs to `*.previous` |
-| 3 | **publish** | Yeni sürümü `rsync -a --delete` ile hedefe yansıtır (atomik) / Mirrors new release atomically |
-| 4 | **write-info** | `.deploy-info` dosyasına künye yazar / Writes deployment record |
-| 5 | **restart** | Servisleri `systemctl restart` ile yeniler / Restarts services |
-| 6 | **health** | Her servisin ayakta olduğunu doğrular / Verifies each service is up |
-| 7 | başarısızsa / on fail | Otomatik rollback + işi başarısız say / Auto rollback + fail the job |
+| 2 | **publish (IDLE renk)** | Yeni sürümü **boş (idle) rengin** dizinine yazar; aktif renk dokunulmaz / Writes new version to the **idle color** dir; active color not touched |
+| 3 | **write-env + write-info** | Gizli ortam ve künye idle renk dizinine yazılır / Secret env and deploy info written to idle color dir |
+| 4 | **restart (IDLE)** | Yalnızca idle rengin systemd birimi başlatılır / Only the idle color systemd unit is restarted |
+| 5 | **health (socket)** | Idle rengin Unix socketi üzerinden sağlık doğrulanır / Health verified via idle color Unix socket |
+| 6 | sağlıklıysa / on pass | **nginx switch**: upstream dosyası yeniden yazılır + graceful reload → sıfır kesintili geçiş / upstream rewritten + graceful reload → zero-downtime switch |
+| 7 | başarısızsa / on fail | Geçiş YAPILMAZ; canlı etkilenmez; job başarısız işaretlenir / Switch NOT made; live unaffected; job marked failed |
 
 **TR:** Tüm bu ağır iş, tek bir `pipeline.sh` scriptinin alt komutlarıyla yapılır: `backup`, `publish-source`, `deploy-artifacts`, `write-info`, `restart`, `health`, `rollback`. Hepsi `SERVICES`'i okuyup tüm servisler üzerinde döner.
 
@@ -191,25 +191,29 @@ sequenceDiagram
 
 ## 5. Sağlık Kontrolü / Health Check
 
-**TR:** Deploy'dan sonra servisin gerçekten çalışıp çalışmadığı `verify-health.sh` ile doğrulanır. Betik, her servisin `health_url`'i için sırasıyla üç göstergeyi dener ve **herhangi biri** olumluysa servisi sağlıklı kabul eder:
+**TR:** Deploy adımlarından sonra, nginx trafik çevirmesinden **önce**, idle rengin **Unix socketi** üzerinden sağlık kontrolü yapılır. Bozuk sürüm canlıya hiç çıkmaz:
 
-**EN:** After deploy, `verify-health.sh` checks whether the service actually runs. For each service's `health_url`, the script tries three indicators in order and considers the service healthy if **any** succeeds:
+- Kontrol: `curl --unix-socket <sock> http://localhost/health` — HTTP 200 (12 deneme × 5 sn).
+- Başarısızsa: nginx geçişi **yapılmaz**; aktif renk değişmez; kullanıcılar etkilenmez.
+- Başarılıysa: nginx upstream dosyası yeniden yazılır + graceful reload → sıfır kesinti geçiş.
 
-1. **TR:** `/health` ucu `{"status":"ok"}` döndürüyor mu / **EN:** the `/health` endpoint returns `{"status":"ok"}`
-2. **TR:** `/health` HTTP 200 / **EN:** `/health` returns HTTP 200
-3. **TR:** Kök `/` HTTP 200 / **EN:** the root `/` returns HTTP 200
+**EN:** After deploy steps, **before** nginx switches traffic, health is checked on the idle color's **Unix socket**. A broken version never reaches users:
 
-**TR:** Kontrol, ayarlanabilir deneme sayısı ve bekleme ile tekrarlanır (varsayılan 12 deneme × 5 sn); servisin başlaması için zaman tanır. Bu tolerans, "servis daha yeni ayağa kalkıyor" ile "servis gerçekten çökmüş" durumlarını ayırt etmeyi sağlar.
+- Check: `curl --unix-socket <sock> http://localhost/health` — HTTP 200 (12 attempts × 5s).
+- On fail: nginx switch is **not made**; active color unchanged; users unaffected.
+- On pass: nginx upstream file rewritten + graceful reload → zero-downtime switch.
 
-**EN:** The check retries with a configurable count and wait (default 12 attempts × 5s), allowing time for the service to start. This tolerance distinguishes "the service is just starting" from "the service is actually down".
+**TR:** `verify-health.sh` beşinci argüman olarak Unix socket verilince soketten kontrol eder; verilmezse public URL'den. Manuel test için kullanılabilir.
+
+**EN:** `verify-health.sh` checks via socket when a 5th (unix-socket) arg is given; otherwise via public URL. Useful for manual testing.
 
 ---
 
 ## 6. Otomatik Geri Alma / Automatic Rollback
 
-**TR:** Deploy sırasında herhangi bir servisin sağlık kontrolü başarısız olursa, boru hattı **kendiliğinden** devreye girer: `*.previous` yedekleri varsa `pipeline.sh rollback` ile bir önceki sürüme döner, tekrar sağlık kontrolü yapar ve işi **başarısız** olarak işaretler. Bu *fail-safe* davranış, hatalı bir dağıtımın kullanıcıya kesinti olarak yansıma süresini en aza indirir — kimsenin gece yarısı müdahale etmesine gerek kalmaz.
+**TR:** Blue-green modelde "otomatik rollback" kavramı farklı çalışır: sağlık başarısız olursa nginx geçişi **hiç yapılmaz**. Aktif renk değişmediğinden kullanıcılar eski (sağlıklı) sürümü görmeye kesintisiz devam eder. Kesinti süresi sıfır. İş "başarısız" işaretlenir; log incelenir, sorun giderilir, yeniden deploy tetiklenir.
 
-**EN:** If any service's health check fails during deploy, the pipeline steps in **automatically**: if `*.previous` backups exist, it reverts to the previous release via `pipeline.sh rollback`, re-checks health, and marks the job as **failed**. This *fail-safe* behavior minimizes the time a faulty deploy is exposed to users — no one has to intervene at midnight.
+**EN:** In the blue-green model, "auto-rollback" works differently: if health fails, the nginx switch is simply **not made**. The active color never changed, so users keep seeing the old (healthy) version without any interruption — downtime is zero. The job is marked "failed"; inspect logs, fix the issue, redeploy.
 
 ---
 
@@ -221,12 +225,12 @@ sequenceDiagram
 
 | Mod / Mode | Ne yapar / What it does | Ne zaman / When |
 |---|---|---|
-| `previous_folder` | `*.previous` yedeğinden anında dönüş (derleme yok) / Instant revert from backup (no rebuild) | Son dağıtım hatalı, hızlı dönüş gerek / Last deploy faulty, need fast return |
-| `specific_commit` | Verilen commit'i derleyip yayımlar / Builds & ships a given commit | Daha eski, belirli bir noktaya dönüş / Return to a specific older point |
+| `previous_folder` | nginx upstream eski renge yeniden yazılır + graceful reload; **derleme yok, dosya kopyası yok**, sıfır kesinti (eski renk zaten çalışıyor) / nginx upstream rewritten to old color + graceful reload; **no rebuild, no file copy**, zero-downtime (old color already running) | Son dağıtım hatalı, hızlı dönüş gerek / Last deploy faulty, need fast return |
+| `specific_commit` | Verilen commit idle renge derlenir, sağlık geçince nginx geçişi yapılır / Given commit built to idle color, nginx switched on health pass | Daha eski, belirli bir noktaya dönüş / Return to a specific older point |
 
-**TR:** Her iki modda da sonunda sağlık kontrolü koşulur; geri almanın da sağlıklı sonuç ürettiği doğrulanır. Rollback da `production` onayına tabidir.
+**TR:** Her iki modda da sonunda socket üzerinden sağlık kontrolü koşulur. Rollback da `production` onayına tabidir.
 
-**EN:** Both modes run a health check at the end, confirming the rollback itself is healthy. Rollback is also subject to `production` approval.
+**EN:** Both modes end with a socket-based health check. Rollback is also subject to `production` approval.
 
 ---
 
@@ -356,13 +360,13 @@ ssh-copy-id -i deploy_key.pub -p 22 deploy@10.0.0.5
 | `RUNNER_LABEL` | `ubuntu-latest` |
 | `SSH_PRIVATE_KEY` (Secret) | `deploy_key` dosyasının içeriği |
 
-**TR:** `SERVICES` içindeki `health_url`, runner'ın erişebildiği adres olmalı (ör. `http://10.0.0.5:5001` — `127.0.0.1` değil).
+**TR:** Blue-green modelde `health_url` iki amaçla kullanılır: (1) **PORT** kısmı nginx'in public portu olarak `setup-host.sh` tarafından alınır; (2) **PATH** kısmı (`/health` vb.) socket sağlık kontrolünde kullanılır. IP kısmı pipeline tarafından yoksayılır.
 
-**EN:** In `SERVICES`, `health_url` must be reachable from the runner (e.g. `http://10.0.0.5:5001` — not `127.0.0.1`).
+**EN:** In blue-green, `health_url` serves two purposes: (1) the **PORT** is used by `setup-host.sh` as nginx's public port; (2) the **PATH** (`/health` etc.) is used by the socket health check. The IP part is ignored by the pipeline.
 
 ### 3. Uzak sunucuda tek seferlik kurulum / One-time remote host setup
 
-**TR:** systemd birimlerini uzak sunucuda oluşturmak için (SSH ile):
+**TR:** nginx + systemd birimlerini uzak sunucuda oluşturmak için (SSH ile, bir kez):
 
 ```bash
 DEPLOY_TARGET=remote \
@@ -372,7 +376,7 @@ SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://10.0.0.5:5001" 
 bash scripts/setup-remote-host.sh
 ```
 
-**EN:** Creates systemd units on the remote server over SSH.
+**EN:** Creates nginx config and systemd units on the remote server over SSH (one-time setup).
 
 ### 4. Uzak kullanıcı yetkileri / Remote user permissions
 
@@ -392,7 +396,7 @@ deploy ALL=(ALL) NOPASSWD: ALL
 |---|---|---|
 | Runner konumu | Uygulama ile aynı makine | Herhangi (ör. `ubuntu-latest`) |
 | Sunucuya SSH | Gerekmez | **SSH key gerekir** |
-| `health_url` | `http://127.0.0.1:port` | `http://<sunucu-ip>:port` |
+| `health_url` PORT | nginx dinleyecek public port | nginx dinleyecek public port |
 | Kurulum | `setup-host.sh` (yerel) | `setup-remote-host.sh` (SSH) |
 
 ### Sorun giderme (uzak/remote bağlantı) / Troubleshooting (remote connection)
@@ -506,25 +510,25 @@ ssh-keyscan -p 22 10.0.0.5
 1. Geliştirici `main`'e push eder → CI otomatik derler, test eder, artifact üretir.
 2. Actions → **Deploy** → açıklama girilir, kaynak seçilir.
 3. `production` onayı verilir.
-4. backup → publish → restart → health → sağlıklıysa **canlı**.
+4. Yeni sürüm **idle renge** yayınlanır → idle yeniden başlatılır → socket sağlık geçer → nginx graceful reload → **sıfır kesintili geçiş**.
 
 **EN — How does a change go live?**
 1. Developer pushes to `main` → CI auto builds, tests, produces an artifact.
 2. Actions → **Deploy** → enter a description, pick a source.
 3. `production` approval is granted.
-4. backup → publish → restart → health → if healthy, **live**.
+4. New version published to **idle color** → idle restarted → socket health passes → nginx graceful reload → **zero-downtime switch**.
 
 **TR — Hatalı bir deploy olursa ne olur?**
-1. Health check başarısız olur.
-2. Boru hattı otomatik olarak `*.previous`'a döner.
-3. Tekrar health check yapılır, iş "başarısız" işaretlenir.
-4. Kullanıcılar önceki çalışan sürümü görmeye devam eder.
+1. Idle renkin socket sağlık kontrolü başarısız olur.
+2. nginx geçişi **yapılmaz** — aktif renk değişmez.
+3. İş "başarısız" işaretlenir.
+4. Kullanıcılar önceki çalışan sürümü **kesintisiz** görmeye devam eder.
 
 **EN — What happens on a bad deploy?**
-1. The health check fails.
-2. The pipeline auto-reverts to `*.previous`.
-3. Health is re-checked, the job is marked "failed".
-4. Users keep seeing the previous working version.
+1. The idle color socket health check fails.
+2. The nginx switch is **not made** — active color unchanged.
+3. The job is marked "failed".
+4. Users keep seeing the previous working version **without any interruption**.
 
 ---
 

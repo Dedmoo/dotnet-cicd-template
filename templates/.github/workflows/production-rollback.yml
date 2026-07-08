@@ -1,8 +1,14 @@
 name: Production Rollback
 
-# Geri Alma / Rollback
-# Uretimi bilincli olarak eski bir duruma dondurur.
-# Deliberately returns production to an earlier state.
+# Geri Alma — Blue-Green / Rollback — Blue-Green
+#
+# previous_folder: nginx trafiklerini diger (onceki surum calistiran) renge cevir + graceful reload.
+#   Sifir kesinti: aktif renk hic kapanmaz.
+# specific_commit: belirtilen commit'i idle renge derle/yayinla, sagliktan gecince gecis yap.
+#
+# previous_folder: switch nginx traffic to the other color (running the previous version) + reload.
+#   Zero-downtime: the active color never goes down.
+# specific_commit: build/publish the specified commit to the idle color, switch on health pass.
 #
 # BU DOSYAYI DUZENLEMENIZE GEREK YOK. Ayni repo Variables/Secrets kullanilir (bkz. production-deploy.yml).
 # NO NEED TO EDIT THIS FILE. Uses the same repo Variables/Secrets (see production-deploy.yml).
@@ -68,6 +74,9 @@ jobs:
               echo "| Hedef commit / Target commit | \`${{ inputs.commit_sha }}\` |"
             fi
             echo ""
+            echo "> **previous_folder:** nginx trafiklerini anlık diger renge (onceki surum) ceviririr — sifir kesinti."
+            echo "> **previous_folder:** instantly switches nginx to the other color (previous version) — zero-downtime."
+            echo ""
             echo "> Onay vermeden once yukaridaki bilgileri dogrulayin."
             echo "> Verify the information above before approving."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -82,35 +91,64 @@ jobs:
         with:
           ref: ${{ inputs.mode == 'specific_commit' && inputs.commit_sha || github.ref }}
 
-      - name: Onceki klasorden geri al / roll back from previous folder
+      # --- previous_folder: nginx renk geciside anlik rollback ---
+      # --- previous_folder: instant rollback via nginx color switch ---
+      - name: Onceki renge gec (anlik, sifir kesinti) / switch to previous color (instant, zero-downtime)
         if: inputs.mode == 'previous_folder'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh rollback
 
+      # --- specific_commit: commit'i idle renge derle + gecis yap ---
+      # --- specific_commit: build commit to idle color + switch ---
       - name: Belirli commit - build + test / specific commit - build + test
         if: inputs.mode == 'specific_commit'
         uses: ./.github/actions/build-test
 
-      - name: Belirli commit - yayinla / specific commit - publish
+      - name: Belirli commit - IDLE renge yayinla / specific commit - publish to IDLE color
+        if: inputs.mode == 'specific_commit'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "${{ inputs.commit_sha }}" ]; then
+            echo "commit_sha zorunlu / required for specific_commit mode"
+            exit 1
+          fi
+          bash scripts/pipeline.sh publish-source
+
+      - name: Belirli commit - gizli ortami yaz / write secret env
         if: inputs.mode == 'specific_commit'
         env:
           APP_ENV: ${{ secrets.APP_ENV }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          if [ -z "${{ inputs.commit_sha }}" ]; then
-            echo "commit_sha zorunlu / required"
-            exit 1
-          fi
-          bash scripts/pipeline.sh backup
-          bash scripts/pipeline.sh publish-source
-          bash scripts/pipeline.sh write-env
-          bash scripts/pipeline.sh restart
+        run: bash scripts/pipeline.sh write-env
 
-      - name: Saglik kontrolu / health check
+      - name: Belirli commit - IDLE rengi yeniden baslat / restart IDLE color
+        if: inputs.mode == 'specific_commit'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: bash scripts/pipeline.sh restart
+
+      - name: Belirli commit - saglik kontrolu (socket) / health check via socket
+        if: inputs.mode == 'specific_commit'
+        id: health_specific
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: bash scripts/pipeline.sh health
+
+      - name: Belirli commit - trafigi gec / switch traffic
+        if: inputs.mode == 'specific_commit' && steps.health_specific.outcome == 'success'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: bash scripts/pipeline.sh switch
+
+      # --- previous_folder: rollback sonrasi aktif rengi dogrula ---
+      # --- previous_folder: verify active color after rollback ---
+      - name: Rollback dogrulamasi — aktif renk saglik kontrolu / verify active color health
+        if: inputs.mode == 'previous_folder'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: bash scripts/pipeline.sh health-active
 
       - name: Rollback ozeti / summary
         if: always()

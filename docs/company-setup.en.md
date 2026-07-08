@@ -105,7 +105,7 @@ Typical requirements for deploy and health checks:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y rsync curl
+sudo apt-get install -y rsync curl nginx
 # .NET runtime/SDK — the version your project targets (e.g. 8)
 ```
 
@@ -146,7 +146,12 @@ web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001
 api|src/Api/Api.csproj|/opt/myapp-api|myapp-api|http://127.0.0.1:5002
 ```
 
-**For remote:** do **not** use `127.0.0.1` in `health_url`. The runner is on another machine — use the server IP/hostname, e.g. `http://203.0.113.10:5001`.
+**`health_url` format (blue-green):**
+- **PORT**: nginx's public port — `setup-host.sh` assigns this port to nginx.
+- **PATH**: health endpoint (`/health` etc.) — used by the socket health check.
+- **IP**: written for `setup-host.sh` or manual testing; the pipeline checks via socket and ignores the IP part.
+
+Example: `http://203.0.113.10:5001/health` → nginx port `5001`; health path `/health`.
 
 ### Local extras
 
@@ -210,7 +215,7 @@ sudo SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:
      bash scripts/setup-host.sh
 ```
 
-Only creates/enables systemd units. Directories are created on first deploy; services stay up after the first successful deploy.
+Per service: (1) two systemd units (`blue`/`green`, listening on Unix socket), (2) nginx upstream include + public-port server block. Installs nginx automatically if not present. Directories are created on first deploy; services stay up after the first successful deploy.
 
 ### Remote
 
@@ -225,7 +230,7 @@ SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://<SERVER-IP>:500
 bash scripts/setup-remote-host.sh
 ```
 
-`health_url` in `SERVICES` must use the same server IP here. This script runs `setup-host.sh` on the remote host (systemd units).
+`health_url` in `SERVICES` must use the same format here. This script runs `setup-host.sh` on the remote host; it creates nginx config and two-color systemd units.
 
 ---
 
@@ -234,7 +239,7 @@ bash scripts/setup-remote-host.sh
 1. Push to `main` → **Continuous Integration** is green in Actions.
 2. Actions → **Production Deploy** → **Run workflow** → enter a required description → leave source `ci_artifact` → Run.
 3. Reviewer reads the `prepare` summary and approves → deploy runs.
-4. If health fails, the pipeline auto-rollbacks and marks the job failed.
+4. If health fails, the nginx switch is **not made**; live traffic is unaffected; the job is marked failed. Fix the issue and trigger a new deploy.
 
 If there is no CI artifact yet (very first setup), use `build_from_source` once; then return to `ci_artifact`.
 
@@ -258,6 +263,7 @@ Do not edit these — project values are not written into YML lines:
 - [ ] Template → new repo; `templates/` at root
 - [ ] `SERVICES` correctly formatted
 - [ ] `production` environment: required reviewers + prevent self-review + `main` only
+- [ ] `nginx` installed on server (`setup-host.sh` installs it or pre-installed)
 - [ ] Continuous Integration green at least once
 - [ ] Production Deploy triggered with a description / approved
 
@@ -268,5 +274,6 @@ Do not edit these — project values are not written into YML lines:
 - [ ] Variables: `DEPLOY_TARGET=remote`, `SSH_HOST`, `SSH_USER`, `RUNNER_LABEL=ubuntu-latest`
 - [ ] Variable: `SSH_KNOWN_HOSTS` = `ssh-keyscan` output
 - [ ] Secret: `SSH_PRIVATE_KEY` = full private key text (BEGIN/END)
-- [ ] `SERVICES` health_url = `http://<server-ip>:port` (not `127.0.0.1`)
+- [ ] `SERVICES` health_url PORT = nginx's public port; PATH = health endpoint (`/health`)
+- [ ] `nginx` installed on the server (or `setup-host.sh` installed it)
 - [ ] `setup-remote-host.sh` run once

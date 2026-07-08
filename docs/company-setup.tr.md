@@ -105,7 +105,7 @@ Deploy ve sağlık kontrolü için tipik gereksinimler:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y rsync curl
+sudo apt-get install -y rsync curl nginx
 # .NET runtime/SDK — projenizin hedeflediği sürüm (ör. 8)
 ```
 
@@ -146,7 +146,12 @@ web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:5001
 api|src/Api/Api.csproj|/opt/myapp-api|myapp-api|http://127.0.0.1:5002
 ```
 
-**Uzak (`remote`) için `health_url`:** `127.0.0.1` **kullanmayın**. Runner ayrı makinededir; sunucu IP/hostname yazın, örn. `http://203.0.113.10:5001`.
+**`health_url` formatı (blue-green):**
+- **PORT**: nginx'in public portu — `setup-host.sh` bu portu nginx'e atar.
+- **PATH**: health endpoint'i (`/health` vb.) — socket sağlık kontrolünde kullanılır.
+- **IP**: `setup-host.sh` veya elle test için yazılır; pipeline socket üzerinden kontrol ettiğinden IP kısmını yoksayar.
+
+Örnek: `http://203.0.113.10:5001/health` → nginx port `5001`; health path `/health`.
 
 ### Yerel (`local`) ek değişkenler
 
@@ -210,7 +215,7 @@ sudo SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://127.0.0.1:
      bash scripts/setup-host.sh
 ```
 
-Yalnızca systemd birimlerini oluşturur/enable eder. Dizinler ilk deploy'da oluşur; servisler ilk başarılı deploy'dan sonra ayakta kalır.
+Her servis için: (1) iki systemd birimi (`blue`/`green`, Unix socket üzerinde), (2) nginx upstream include + public-port server bloğu oluşturur. nginx kurulu değilse otomatik kurar. Dizinler ilk deploy'da oluşur; servisler ilk başarılı deploy'dan sonra ayakta kalır.
 
 ### Uzak
 
@@ -225,7 +230,7 @@ SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://<SUNUCU-IP>:500
 bash scripts/setup-remote-host.sh
 ```
 
-`SERVICES` içindeki `health_url` burada da sunucu IP ile aynı olmalıdır. Bu script uzak sunucuda `setup-host.sh` çalıştırır (systemd unit'leri).
+`SERVICES` içindeki `health_url` burada da aynı format olmalıdır. Bu script uzak sunucuda `setup-host.sh` çalıştırır; nginx + iki renk systemd birimini oluşturur.
 
 ---
 
@@ -234,7 +239,7 @@ bash scripts/setup-remote-host.sh
 1. `main`'e push → Actions'ta **Continuous Integration** yeşil olsun.
 2. Actions → **Production Deploy** → **Run workflow** → zorunlu açıklama yazın → kaynak `ci_artifact` kalsın → Run.
 3. Reviewer `prepare` özetini okuyup onaylasın → deploy koşar.
-4. Health fail olursa pipeline otomatik rollback dener ve işi kırmızıya çeker.
+4. Health fail olursa nginx geçişi **yapılmaz**; canlı etkilenmez; job kırmızıya çeker. Sorunu giderin, yeniden deploy tetikleyin.
 
 İlk kurulumda henüz CI artifact yoksa bir kez `build_from_source` kullanabilirsiniz; sonraki normale `ci_artifact` dönün.
 
@@ -258,6 +263,7 @@ bash scripts/setup-remote-host.sh
 - [ ] Template → yeni repo; `templates/` kökte
 - [ ] `SERVICES` doğru formatta
 - [ ] `production` environment: required reviewers + prevent self-review + `main` only
+- [ ] `nginx` sunucuda kurulu (`setup-host.sh` kurar veya önceden kurulmuş)
 - [ ] Continuous Integration en az bir kez yeşil
 - [ ] Production Deploy açıklama ile tetiklendi / onaylandı
 
@@ -268,5 +274,6 @@ bash scripts/setup-remote-host.sh
 - [ ] Variables: `DEPLOY_TARGET=remote`, `SSH_HOST`, `SSH_USER`, `RUNNER_LABEL=ubuntu-latest`
 - [ ] Variable: `SSH_KNOWN_HOSTS` = `ssh-keyscan` çıktısı
 - [ ] Secret: `SSH_PRIVATE_KEY` = private key tam metin (BEGIN/END)
-- [ ] `SERVICES` health_url = `http://<sunucu-ip>:port` (127.0.0.1 değil)
+- [ ] `SERVICES` health_url PORT = nginx'in public portu; PATH = health endpoint (`/health`)
+- [ ] Sunucuda `nginx` kurulu (veya `setup-host.sh` kurdu)
 - [ ] `setup-remote-host.sh` bir kez çalıştı

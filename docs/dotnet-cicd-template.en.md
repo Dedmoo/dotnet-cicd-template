@@ -70,10 +70,14 @@ flowchart TB
             S2["service #2<br/>/opt/… : port"]
             SN["service #N …"]
         end
-        BK["Backups · *.previous"]
+        BK["nginx · reverse proxy · graceful reload"]
+        SOCK["Unix socket · /run/cicd/*.sock"]
         DB[("database / infra<br/>optional")]
         RUNNER --> SVC
         RUNNER --> BK
+        RUNNER --> SOCK
+        BK --> SVC
+        SOCK --> SVC
         SVC --> DB
     end
 
@@ -97,11 +101,11 @@ name|csproj|deploy_dir|service_name|health_url
 | `csproj` | Project file to publish | `src/Web/Web.csproj` |
 | `deploy_dir` | Target directory on the host | `/opt/myapp-web` |
 | `service_name` | systemd service name | `myapp-web` |
-| `health_url` | Health check base URL | `http://127.0.0.1:5001` |
+| `health_url` | nginx public port + health path | `http://SERVER-IP:5001/health` |
 
 This block is defined in one place as a **repo variable (`vars.SERVICES`)** on GitHub; `continuous-integration.yml`, `production-deploy.yml` and `production-rollback.yml` read this variable (no file editing needed). In host setup, the same value is passed once to `setup-host.sh` as an environment variable. CI uses only the first two fields (`name|csproj`); the rest are ignored.
 
-**Derived values:** The `dll` name is derived from `csproj` (`Web.csproj` → `Web.dll`), and the binding port is extracted automatically from `health_url`. This keeps `SERVICES` free of redundant fields.
+**Derived values:** The `dll` name is derived from `csproj` (`Web.csproj` → `Web.dll`), and the nginx port and health path are extracted automatically from `health_url`. .NET services start with `--urls http://unix:<socket>` and do not expose a port directly to the outside; nginx connects via the Unix socket.
 
 ## 4. Pipeline Components
 
@@ -113,28 +117,34 @@ This block is defined in one place as a **repo variable (`vars.SERVICES`)** on G
 - **Why decoupled?** This tested output can later be deployed unchanged (*build-once, deploy-many*).
 - **Permissions:** Workflows run with least privilege (`permissions: contents: read`); the token's scope is not left needlessly broad.
 
-### 4.2 Deploy (`production-deploy.yml` + `pipeline.sh`)
+### 4.2 Deploy (`production-deploy.yml` + `pipeline.sh`) — Blue-Green
 
-Manually triggered (`workflow_dispatch`), taking two inputs: `description` (mandatory) and `source`. The `source` default is **`ci_artifact`** (recommended): it uses the latest successful CI output and performs a **commit provenance check** — if the commit of the CI run that produced the artifact (`headSha`) does not match the deployed commit (`github.sha`), the deploy stops. `build_from_source` rebuilds from source at deploy time (for first setup or emergency/debug). Flow:
+Manually triggered (`workflow_dispatch`), taking two inputs: `description` (mandatory) and `source`. The `source` default is **`ci_artifact`** (recommended): it uses the latest successful CI output and performs a **commit provenance check** — if the commit of the CI run that produced the artifact (`headSha`) does not match the deployed commit (`github.sha`), the deploy stops. `build_from_source` rebuilds from source at deploy time.
+
+**Blue-green flow:** Each service has two directories (`deploy_dir-blue`, `deploy_dir-green`) and two systemd units (`service_name-blue`, `service_name-green`). nginx always routes to one color via a Unix socket (the active color). Deploy writes to the idle color; once health passes nginx does a graceful reload to switch to the new active color.
 
 ```mermaid
 flowchart TB
-    A["Manual trigger + production approval"] --> B["download CI artifact (+commit provenance) OR build+test"]
-    B --> C["backup: current -> *.previous"]
-    C --> D["publish-source OR deploy-artifacts (rsync --delete)"]
-    D --> E["write-info: .deploy-info (who/when/commit)"]
-    E --> F["restart: systemctl"]
-    F --> G["health: verify-health.sh per service"]
-    G --> H{"healthy?"}
-    H -->|Yes| I["Success"]
-    H -->|No| J["rollback + fail the job"]
+    A["Manual trigger + production approval"] --> B["download CI artifact (+provenance) OR build+test"]
+    B --> C["publish: to IDLE color (blue/green)"]
+    C --> D["write-env + write-info: to IDLE color directory"]
+    D --> E["restart: only the IDLE color systemd unit"]
+    E --> F["health: curl --unix-socket on IDLE color Unix socket"]
+    F --> G{"healthy?"}
+    G -->|Yes| H["nginx switch: rewrite upstream + graceful reload"]
+    H --> I["Success — old color stays up (instant rollback target)"]
+    G -->|No| J["NO switch — live NOT affected — job fails"]
 ```
 
-`pipeline.sh` subcommands: `backup`, `publish-source`, `deploy-artifacts`, `write-info`, `restart`, `health`, `rollback`. All read `SERVICES` and iterate over all services.
+`pipeline.sh` subcommands: `publish-source`, `deploy-artifacts`, `write-env`, `write-info`, `restart`, `health`, `health-active`, `switch`, `rollback`. All read `SERVICES` and iterate over all services.
 
-### 4.3 Rollback (`production-rollback.yml`)
+### 4.3 Rollback (`production-rollback.yml`) — Blue-Green
 
-Two modes: `previous_folder` (instant reversion from the `*.previous` backup) and `specific_commit` (builds and publishes a given commit). A health check runs at the end of both modes.
+Two modes:
+- `previous_folder`: The nginx upstream file is **rewritten to the other color** + graceful reload. No file copy, no build, zero downtime — the old color was already running.
+- `specific_commit`: The given commit is built into the idle color + restart + health socket check; once it passes, nginx switches.
+
+A health check runs at the end of both modes.
 
 ## 5. Universal Principles
 
@@ -145,8 +155,8 @@ Two modes: `previous_folder` (instant reversion from the `*.previous` backup) an
 | Approval gate | `environment: production` + reviewer/self-review/`main` | Prevents unauthorized production deploys |
 | Least privilege | `permissions: contents: read` (+ `actions: read` on deploy) | Narrows the token's scope |
 | Auditability | `.deploy-info` + `run-name` | Who/when/why record |
-| Atomic update | staging + `rsync --delete` | No partial/mixed file state |
-| Fail-safe | health + automatic rollback | Minimizes impact of a faulty deploy |
+| Zero-downtime (blue-green) | write to idle; nginx switch on health pass | Broken deploy never reaches live |
+| Fail-safe | health fails → nginx NOT switched; live unchanged | Faulty deploy has zero user impact |
 | Race-condition prevention | `concurrency` group | Concurrent deploys do not clash |
 
 ## 6. Adapting to Your Project (Step by Step)
@@ -195,9 +205,11 @@ templates/
 │       ├── production-deploy.yml       # manual, approval-gated, health + auto-rollback
 │       └── production-rollback.yml     # previous_folder | specific_commit
 └── scripts/
-    ├── pipeline.sh                # backup/publish/deploy/restart/health/rollback
-    ├── verify-health.sh           # /health -> swagger/root fallback
-    └── setup-host.sh              # generates systemd units from SERVICES
+    ├── pipeline.sh                # blue-green: publish/deploy/write-env/restart/health/switch/rollback
+    ├── ssh-remote.sh              # SSH key/rsync/remote commands (ControlMaster)
+    ├── verify-health.sh           # public-URL or Unix socket health check
+    ├── setup-remote-host.sh       # runs setup-host.sh on remote server via SSH
+    └── setup-host.sh              # installs nginx + dual-color systemd units
 ```
 
 ## 9. Evaluation and Limitations
@@ -207,7 +219,7 @@ templates/
 **Limitations and recommendations:**
 
 - **A single runner** is a single point of failure; multiple runners are recommended for critical environments.
-- **Zero-downtime deployment** is not provided; a brief outage may occur during restart. It can be extended with blue-green/canary.
+- **Blue-green deployment** is integrated by default and provides connection-level zero-downtime. However, **in-process memory state** (cart, session, cache) is not shared between the two colors — different .NET processes cannot read the same memory address. Redis or a database must be used for persistent state. This constraint must be considered for applications with sticky sessions.
 - **Database migrations** are not part of the pipeline; the optional "ensure infra" step in `production-deploy.yml` is reserved for this.
 - **Secrets** should be kept in GitHub Secrets / a secret vault rather than in configuration files.
 
@@ -234,6 +246,8 @@ api|src/PublicApi/PublicApi.csproj|/opt/eshopapi|eshopapi|http://127.0.0.1:5200
 | Self-hosted runner | An agent executing workflows on your own server. |
 | Health check | A check verifying that the service is up and responsive. |
 | Rollback | Returning production to a previous working state. |
+| Blue-green | Two deployment channels (live/active and idle); nginx graceful reload switches between them with zero downtime. |
+| Unix socket | A file-system-path socket for inter-process communication; used for .NET → nginx communication. |
 
 **References**
 

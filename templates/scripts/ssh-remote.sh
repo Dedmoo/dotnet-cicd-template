@@ -14,6 +14,7 @@ set -euo pipefail
 
 SSH_PORT="${SSH_PORT:-22}"
 SSH_KEY_FILE=""
+SSH_CONTROL_PATH=""
 
 is_remote() {
   [ "${DEPLOY_TARGET:-local}" = "remote" ]
@@ -40,6 +41,12 @@ ssh_remote_init() {
   SSH_KEY_FILE="$(mktemp)"
   printf '%s\n' "$SSH_PRIVATE_KEY" > "$SSH_KEY_FILE"
   chmod 600 "$SSH_KEY_FILE"
+
+  # SSH ControlMaster soket dosyasi: tekrar eden baglantilari yeniden kullanir,
+  # blue-green renk tespiti icin yapilan cok sayida SSH cagrisini hizlandirir.
+  # SSH ControlMaster socket: reuses connections, speeds up repeated SSH calls
+  # needed for blue-green color detection across pipeline commands.
+  SSH_CONTROL_PATH="$(mktemp -u "/tmp/cicd-ssh-XXXXXX")"
 
   mkdir -p "${HOME}/.ssh"
   chmod 700 "${HOME}/.ssh"
@@ -72,8 +79,12 @@ ssh_remote_init() {
   chmod 600 "$known_hosts" 2>/dev/null || true
 
   export SSH_TARGET="${SSH_USER}@${SSH_HOST}"
-  export SSH_CMD=(ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15)
-  export RSYNC_SSH="ssh -i ${SSH_KEY_FILE} -p ${SSH_PORT} -o StrictHostKeyChecking=yes -o BatchMode=yes"
+  export SSH_CMD=(ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT"
+    -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15
+    -o ControlMaster=auto -o "ControlPath=${SSH_CONTROL_PATH}" -o ControlPersist=60s)
+  export RSYNC_SSH="ssh -i ${SSH_KEY_FILE} -p ${SSH_PORT} \
+    -o StrictHostKeyChecking=yes -o BatchMode=yes \
+    -o ControlMaster=auto -o ControlPath=${SSH_CONTROL_PATH} -o ControlPersist=60s"
 
   echo "SSH hazir / ready: ${SSH_TARGET} (port ${SSH_PORT})"
 }
@@ -82,10 +93,22 @@ ssh_remote_cleanup() {
   if [ -n "$SSH_KEY_FILE" ] && [ -f "$SSH_KEY_FILE" ]; then
     rm -f "$SSH_KEY_FILE"
   fi
+  # ControlMaster soketini kapat / close the ControlMaster socket
+  if [ -n "$SSH_CONTROL_PATH" ] && [ -S "$SSH_CONTROL_PATH" ]; then
+    "${SSH_CMD[@]}" -O exit "$SSH_TARGET" 2>/dev/null || true
+    rm -f "$SSH_CONTROL_PATH"
+  fi
 }
 
 remote_ssh() {
   "${SSH_CMD[@]}" "$SSH_TARGET" "$@"
+}
+
+# Stdin'den okunan scripti uzak hostda calistirir; positional arglar $1, $2, ... olarak iletilir.
+# Runs a script read from stdin on the remote host; positional args are passed as $1, $2, ...
+# Usage: remote_ssh_stdin arg1 arg2 <<'SCRIPT' ... SCRIPT
+remote_ssh_stdin() {
+  "${SSH_CMD[@]}" "$SSH_TARGET" bash -s -- "$@"
 }
 
 remote_sudo() {
