@@ -48,30 +48,37 @@ The pattern comprises three logical layers and remains the same regardless of wh
 ```mermaid
 flowchart TB
     subgraph GH["GitHub (Cloud)"]
-        REPO["Repository: workflows + source code"]
-        CI["CI"]
-        CD["Deploy"]
-        RB["Rollback"]
-        ENV["production environment (approval gate)"]
+        direction TB
+        REPO["Repository<br/>workflows + source code"]
+        CI["CI · automatic (push / PR)"]
+        CD["Deploy · manual"]
+        RB["Rollback · manual"]
+        ENV{{"production<br/>approval gate"}}
+        REPO --> CI
+        REPO --> CD
+        REPO --> RB
+        CD --> ENV
+        RB --> ENV
     end
 
-    subgraph HOST["Self-Hosted Runner (any Linux host)"]
-        RUNNER["GitHub Actions runner"]
-        subgraph SVC["Services (systemd) - defined by SERVICES"]
-            S1["service #1 - /opt/... - port X"]
-            S2["service #2 - /opt/... - port Y"]
-            SN["service #N ..."]
+    subgraph HOST["Self-Hosted Runner Host (Linux)"]
+        direction TB
+        RUNNER(["Self-hosted GitHub Actions runner"])
+        subgraph SVC["Services · systemd · defined by SERVICES"]
+            direction LR
+            S1["service #1<br/>/opt/… : port"]
+            S2["service #2<br/>/opt/… : port"]
+            SN["service #N …"]
         end
-        DB["(optional) database / infrastructure"]
-        BK["Backups: *.previous"]
+        BK["Backups · *.previous"]
+        DB[("database / infra<br/>optional")]
+        RUNNER --> SVC
+        RUNNER --> BK
+        SVC --> DB
     end
 
-    REPO --> CI --> RUNNER
-    REPO --> CD --> ENV --> RUNNER
-    REPO --> RB --> RUNNER
-    RUNNER --> S1 & S2 & SN
-    S1 & S2 --> DB
-    RUNNER --> BK
+    CI ==>|no approval| RUNNER
+    ENV ==>|after approval| RUNNER
 ```
 
 The number of services (one, two, or more) depends only on the number of lines added to the `SERVICES` block; the workflows iterate over these lines.
