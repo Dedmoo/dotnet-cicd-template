@@ -168,7 +168,7 @@ To use this template you **edit no files.** All application-specific values are 
    - `SERVICES` (required): the service list, one line each `name|csproj|deploy_dir|service_name|health_url`.
    - `EF_PROJECT` (required for DB projects): path to `.csproj` with migrations.
    - `EF_STARTUP_PROJECT` (optional): startup `.csproj`; if empty, first `SERVICES` csproj is used.
-   - `RUNNER_LABEL` (optional): runner label (default `self-hosted`).
+   - `RUNNER_LABEL` (optional): runner label (default `ubuntu-latest`; required `self-hosted` for local deploy).
    - `ARTIFACT_NAME` (optional): artifact name (default `app-publish`).
 3. **Add Secrets:** Put `KEY=VALUE` lines into the `APP_ENV` secret (connection strings required for DB projects, API keys optional). Injected as `.env` per service at deploy; also loaded on the runner during migration.
 4. **Create and harden the `production` environment:** Settings → Environments → add `production`; define **required reviewers**, enable **prevent self-review**, and restrict deployments to the **`main`** branch only (you may add an optional **wait timer**). These settings make the approval gate genuinely effective.

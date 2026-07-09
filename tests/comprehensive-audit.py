@@ -147,6 +147,13 @@ def audit_script_quality() -> None:
         else:
             ok("B03", f"{path.name} LF only")
 
+    for path in sorted((ROOT / "tests").glob("*.sh")):
+        label = f"tests/{path.name}"
+        if b"\r\n" in path.read_bytes():
+            fail("B03", f"{label} CRLF iceriyor")
+        else:
+            ok("B03", f"{label} LF only")
+
     ensure = read_text(SCRIPTS / "ensure-infra.sh")
     stale = [
         "yapilandirilmamis / not configured",
@@ -272,6 +279,26 @@ def audit_workflows() -> None:
         ok("C11", f"deploy action SHA pin ({len(pinned)} adet)")
     else:
         fail("C11", "deploy action SHA pin yetersiz")
+
+    workflow_files = [
+        WORKFLOWS / "production-deploy.yml",
+        WORKFLOWS / "production-rollback.yml",
+        WORKFLOWS / "reusable-dotnet-build.yml",
+    ]
+    bad_runner_default = [
+        p.name
+        for p in workflow_files
+        if "vars.RUNNER_LABEL || 'self-hosted'" in read_text(p)
+    ]
+    if bad_runner_default:
+        fail("C12", f"RUNNER_LABEL varsayilan self-hosted: {', '.join(bad_runner_default)}")
+    else:
+        ok("C12", "RUNNER_LABEL varsayilan ubuntu-latest")
+
+    if "RUNNER_LABEL=self-hosted zorunlu" in deploy:
+        ok("C13", "deploy local RUNNER_LABEL fail-fast")
+    else:
+        fail("C13", "deploy local RUNNER_LABEL fail-fast eksik")
 
 
 # ---------------------------------------------------------------------------

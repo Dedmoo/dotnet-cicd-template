@@ -73,7 +73,7 @@ jobs:
   # prepare: onaysiz, hemen kosar. Onaylayan kisi bu job'in ozetini gorur, sonra onay verir.
   # prepare: runs without approval. The reviewer sees this job's summary before approving.
   prepare:
-    runs-on: ${{ vars.RUNNER_LABEL || 'self-hosted' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     outputs:
       commit_subject: ${{ steps.info.outputs.commit_subject }}
       commit_hash: ${{ steps.info.outputs.commit_hash }}
@@ -105,7 +105,7 @@ jobs:
 
   deploy:
     needs: prepare
-    runs-on: ${{ vars.RUNNER_LABEL || 'self-hosted' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: production    # onay kapisi bu ortama baglanir / approval gate binds to this environment
     steps:
       - name: Checkout
@@ -114,6 +114,7 @@ jobs:
       - name: Yapilandirmayi dogrula / validate configuration
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          RUNNER_LABEL: ${{ vars.RUNNER_LABEL }}
         run: |
           if [ -z "${SERVICES// /}" ]; then
             echo "HATA / ERROR: 'SERVICES' repo degiskeni tanimli degil."
@@ -139,6 +140,11 @@ jobs:
             if [ "$missing" -ne 0 ]; then exit 1; fi
             echo "Deploy modu / mode: remote -> ${SSH_USER}@${SSH_HOST}:${SSH_PORT}"
           else
+            if [ -z "${RUNNER_LABEL:-}" ] || [ "$RUNNER_LABEL" = "ubuntu-latest" ]; then
+              echo "HATA / ERROR: local deploy icin RUNNER_LABEL=self-hosted zorunlu (runner hedef sunucuda olmali)."
+              echo "  Remote deploy icin DEPLOY_TARGET=remote kullanin (varsayilan runner: ubuntu-latest)."
+              exit 1
+            fi
             echo "Deploy modu / mode: local (runner = hedef host)"
           fi
 

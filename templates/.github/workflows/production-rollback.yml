@@ -58,7 +58,7 @@ jobs:
   # prepare: onaysiz, hemen kosar. Onaylayan kisi bu job'in ozetini gorur, sonra onay verir.
   # prepare: runs without approval. The reviewer sees this job's summary before approving.
   prepare:
-    runs-on: ${{ vars.RUNNER_LABEL || 'self-hosted' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - name: Rollback on bilgisi / pre-rollback info
         run: |
@@ -83,13 +83,44 @@ jobs:
 
   rollback:
     needs: prepare
-    runs-on: ${{ vars.RUNNER_LABEL || 'self-hosted' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.mode == 'specific_commit' && inputs.commit_sha || github.ref }}
+
+      - name: Yapilandirmayi dogrula / validate configuration
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          RUNNER_LABEL: ${{ vars.RUNNER_LABEL }}
+        run: |
+          if [ -z "${SERVICES// /}" ]; then
+            echo "HATA / ERROR: 'SERVICES' repo degiskeni tanimli degil."
+            exit 1
+          fi
+          if [ "$DEPLOY_TARGET" = "remote" ]; then
+            missing=0
+            for v in SSH_HOST SSH_USER; do
+              if [ -z "${!v:-}" ]; then
+                echo "HATA / ERROR: remote rollback icin '$v' variable gerekli."
+                missing=1
+              fi
+            done
+            if [ -z "${SSH_KNOWN_HOSTS:-}" ]; then
+              echo "HATA / ERROR: remote rollback icin 'SSH_KNOWN_HOSTS' variable zorunlu."
+              missing=1
+            fi
+            if [ -z "${SSH_PRIVATE_KEY:-}" ]; then
+              echo "HATA / ERROR: remote rollback icin 'SSH_PRIVATE_KEY' secret gerekli."
+              missing=1
+            fi
+            if [ "$missing" -ne 0 ]; then exit 1; fi
+          elif [ -z "${RUNNER_LABEL:-}" ] || [ "$RUNNER_LABEL" = "ubuntu-latest" ]; then
+            echo "HATA / ERROR: local rollback icin RUNNER_LABEL=self-hosted zorunlu."
+            exit 1
+          fi
 
       # --- previous_folder: nginx renk geciside anlik rollback ---
       # --- previous_folder: instant rollback via nginx color switch ---

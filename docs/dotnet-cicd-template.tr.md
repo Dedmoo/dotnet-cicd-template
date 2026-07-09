@@ -168,7 +168,7 @@ Bu şablonu kullanmak için **hiçbir dosyayı düzenlemezsiniz.** Uygulamaya ö
    - `SERVICES` (zorunlu): servis listesi, her satır `name|csproj|deploy_dir|service_name|health_url`.
    - `EF_PROJECT` (DB projeleri için zorunlu): migration içeren `.csproj` yolu.
    - `EF_STARTUP_PROJECT` (opsiyonel): startup `.csproj`; boşsa `SERVICES` ilk csproj kullanılır.
-   - `RUNNER_LABEL` (opsiyonel): çalıştırıcı etiketi (varsayılan `self-hosted`).
+   - `RUNNER_LABEL` (opsiyonel): çalıştırıcı etiketi (varsayılan `ubuntu-latest`; local deploy için `self-hosted` zorunlu).
    - `ARTIFACT_NAME` (opsiyonel): artifact adı (varsayılan `app-publish`).
 3. **Gizli bilgileri girin (Secrets):** `APP_ENV` secret'ine `KEY=VALUE` satırları koyun (bağlantı dizeleri zorunlu, API anahtarları opsiyonel). Deploy'da her servise `.env` olarak enjekte edilir; migration sırasında runner ortamına da yüklenir.
 4. **`production` ortamını oluşturun ve sertleştirin:** Settings → Environments → `production` ekleyin; **required reviewers** tanımlayın, **prevent self-review**'i açın ve dağıtımı **yalnızca `main`** dalına kısıtlayın (opsiyonel bir **wait timer** ekleyebilirsiniz). Bu ayarlar onay kapısını gerçekten etkili kılar.

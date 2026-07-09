@@ -1,8 +1,8 @@
 # CI/CD Pipeline Blueprint
 
-**TR:** Projeden bağımsız, kopyala-yapıştır bir CI/CD boru hattı şablonu. Kendinden barındırmalı (self-hosted) bir GitHub Actions çalıştırıcısı üzerinde; otomatik derleme/test, onaya bağlı üretim dağıtımı, **sıfır kesintili blue-green dağıtım**, sağlık kontrolü, deploy öncesi geçiş engelleme (sağlık geçmezse trafik değişmez) ve onaylı anında geri alma sağlar. Herhangi bir .NET projesine tek bir `SERVICES` bloğu doldurularak dakikalar içinde uyarlanır.
+**TR:** Projeden bağımsız, kopyala-yapıştır bir CI/CD boru hattı şablonu. GitHub Actions (`ubuntu-latest`) üzerinde derleme/test yapar; üretim dağıtımını **SSH ile uzak Linux sunucuya** gönderir — müşteri PC'sine runner kurulumu gerekmez. Onaya bağlı deploy, **sıfır kesintili blue-green**, sağlık kontrolü (geçmezse trafik değişmez), EF Core migration ve onaylı rollback içerir. Herhangi bir .NET projesine tek bir `SERVICES` bloğu doldurularak dakikalar içinde uyarlanır.
 
-**EN:** A project-agnostic, copy-paste CI/CD pipeline template. On a self-hosted GitHub Actions runner it provides automatic build/test, approval-gated production deployment, **zero-downtime blue-green deploys**, health checks, pre-switch protection (traffic never moves if health fails) and approval-gated instant rollback. It adapts to any .NET project in minutes by filling in a single `SERVICES` block.
+**EN:** A project-agnostic, copy-paste CI/CD pipeline template. Builds and tests on GitHub Actions (`ubuntu-latest`), then deploys to a **remote Linux server over SSH** — no runner install on the customer's PC. Includes approval-gated deploy, **zero-downtime blue-green**, health checks (no traffic switch on failure), EF Core migrations, and approval-gated rollback. Adapts to any .NET project in minutes via a single `SERVICES` block.
 
 **TR — İlk kez mi kuruyorsunuz?** Öğrenmeye gerek yok: [`docs/beginner-walkthrough.tr.md`](./docs/beginner-walkthrough.tr.md)  
 **EN — First time setup?** No theory needed: [`docs/beginner-walkthrough.en.md`](./docs/beginner-walkthrough.en.md)
@@ -311,7 +311,7 @@ note=ana sayfa metni güncellendi
 |---|---|---|---|
 | Variable | `DEPLOY_TARGET` | Hayır / No | `local` (varsayılan) veya **`remote`** (uzak sunucu) |
 | Variable | `SERVICES` | Evet / Yes | Servis listesi (aşağıya bakın) / service list (see below) |
-| Variable | `RUNNER_LABEL` | Hayır / No | `ubuntu-latest` (remote önerilir) veya `self-hosted` |
+| Variable | `RUNNER_LABEL` | Hayır / No | Varsayılan `ubuntu-latest` (remote). Local deploy için `self-hosted` zorunlu / default `ubuntu-latest` (remote). Required `self-hosted` for local deploy |
 | Variable | `SSH_HOST` | remote için / for remote | Uzak sunucu IP veya hostname / remote server IP or hostname |
 | Variable | `SSH_USER` | remote için / for remote | SSH kullanıcısı (ör. `deploy`) / SSH user (e.g. `deploy`) |
 | Variable | `SSH_PORT` | Hayır / No | SSH portu (varsayılan `22`) / SSH port (default `22`) |
