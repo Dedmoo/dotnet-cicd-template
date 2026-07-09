@@ -336,11 +336,25 @@ nginx_write_upstream() {
 }
 
 # nginx yapilandirmasini test et ve graceful reload yap / Test and graceful-reload nginx
+# ONEMLI: 'nginx -t' basarisiz olursa fonksiyon MUTLAKA hata donmeli. Aksi halde
+# cagiran (cmd_switch/cmd_rollback) reload basarisizken aktif renk state'ini yazar ve
+# disk state'i ile canli nginx tutarsiz kalir (STATE-01/A). Trailing echo bir AND-OR
+# listesinin ardindan geldiginde 'set -e' devreye girmedigi icin durumu acikca ele aliriz.
+#
+# IMPORTANT: if 'nginx -t' fails this function MUST return non-zero. Otherwise the caller
+# (cmd_switch/cmd_rollback) would persist the active-color state while the reload failed,
+# leaving the on-disk state inconsistent with the live nginx (STATE-01/A). Because 'set -e'
+# is not triggered by an AND-OR list followed by another command, we handle it explicitly.
 nginx_reload() {
+  local ok=0
   if is_remote; then
-    remote_sudo "nginx -t && nginx -s reload"
+    remote_sudo "nginx -t && nginx -s reload" || ok=1
   else
-    nginx -t && nginx -s reload
+    { nginx -t && nginx -s reload; } || ok=1
+  fi
+  if [ "$ok" -ne 0 ]; then
+    echo "HATA: nginx yapilandirma testi/reload basarisiz / nginx config test or reload failed" >&2
+    return 1
   fi
   echo "nginx graceful reload tamam / done"
 }

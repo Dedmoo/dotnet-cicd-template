@@ -17,6 +17,14 @@
 | Türkçe | [`docs/beginner-walkthrough.tr.md`](./docs/beginner-walkthrough.tr.md) |
 | English | [`docs/beginner-walkthrough.en.md`](./docs/beginner-walkthrough.en.md) |
 
+**TR:** Kendi .NET projenize sıfırdan tam entegrasyon (kod nereye + sunucu + GitHub, uçtan uca):
+**EN:** Full from-scratch integration into your own .NET project (where code goes + server + GitHub, end to end):
+
+| Dil / Language | Belge / Document |
+|---|---|
+| Türkçe | [`docs/kendi-projene-entegrasyon.tr.md`](./docs/kendi-projene-entegrasyon.tr.md) |
+| English | [`docs/own-project-integration.en.md`](./docs/own-project-integration.en.md) |
+
 **TR:** Firmaya özel ayarlar (Variables/Secrets/Environments) — tablo referansı:
 **EN:** Company-specific settings (Variables/Secrets/Environments) — table reference:
 
