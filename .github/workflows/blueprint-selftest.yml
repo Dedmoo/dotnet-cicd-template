@@ -33,8 +33,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y shellcheck
           shellcheck --version
-          # -x: 'source' ile dahil edilen dosyalari takip et (ssh-remote.sh)
-          shellcheck -x templates/scripts/*.sh
+          # -x: 'source' ile dahil edilen dosyalari takip et (ssh-remote.sh).
+          # -e SC1091: source yolu ${SCRIPT_DIR} calisma-zamani degiskeni oldugundan
+          # statik olarak cozulemez; bu info bulgusu kacinilmazdir ve gizlenir.
+          # Diger tum severity'ler (style/info dahil) aktiftir.
+          # -x: follow sourced files (ssh-remote.sh). -e SC1091: the source path uses
+          # the runtime var ${SCRIPT_DIR} so it can't be resolved statically; this info
+          # finding is unavoidable and is excluded. All other severities remain active.
+          shellcheck -x -e SC1091 templates/scripts/*.sh
 
       - name: actionlint (templates workflows + action)
         run: |
