@@ -7,6 +7,9 @@
 **TR — İlk kez mi kuruyorsunuz?** Öğrenmeye gerek yok: [`docs/beginner-walkthrough.tr.md`](./docs/beginner-walkthrough.tr.md)  
 **EN — First time setup?** No theory needed: [`docs/beginner-walkthrough.en.md`](./docs/beginner-walkthrough.en.md)
 
+**TR — Tanıtım videosu:** [video/cicd-tanitim.mp4](./video/cicd-tanitim.mp4) (~11 MB)  
+**EN — Intro video:** [video/cicd-tanitim.mp4](./video/cicd-tanitim.mp4) (~11 MB)
+
 ## Dokümantasyon / Documentation
 
 **TR:** Hiç bilmeyen / ilk kez kuran için (öğrenme yok — tıklaya tıklaya):
