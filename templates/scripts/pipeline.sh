@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # CI/CD Blueprint - cok servisli blue-green deploy/rollback yardimcisi
-# CI/CD Blueprint - multi-service blue-green deploy/rollback helper
+# CI/CD Blueprint - multi-service blue-green deploy/rollback helpe
 #
 # DEPLOY_TARGET:
 #   local  - runner ve uygulama ayni makinede (varsayilan / default)
@@ -170,8 +170,8 @@ color_target() {
 }
 
 # Yardimci turetici fonksiyonlar / Derived path helpers
-dir_for()  { printf '%s-%s' "$1" "$2"; }                     # (deploy_dir, color) -> deploy_dir-color
-unit_for() { printf '%s-%s' "$1" "$2"; }                     # (svc, color) -> svc-color
+dir_for()  { printf '%s-%s' "$1" "$2"; }                     # (deploy_dir, color) -> deploy_dir-colo
+unit_for() { printf '%s-%s' "$1" "$2"; }                     # (svc, color) -> svc-colo
 sock_for() { printf '/run/cicd/%s-%s.sock' "$1" "$2"; }      # (svc, color) -> socket path
 # Servis hesabi adi: setup-host.sh ile ayni konvansiyon (dusuk yetkili, login yok).
 # Service account name: same convention as setup-host.sh (low-privilege, no login).
@@ -341,7 +341,7 @@ nginx_write_upstream() {
 # disk state'i ile canli nginx tutarsiz kalir (STATE-01/A). Trailing echo bir AND-OR
 # listesinin ardindan geldiginde 'set -e' devreye girmedigi icin durumu acikca ele aliriz.
 #
-# IMPORTANT: if 'nginx -t' fails this function MUST return non-zero. Otherwise the caller
+# IMPORTANT: if 'nginx -t' fails this function MUST return non-zero. Otherwise the calle
 # (cmd_switch/cmd_rollback) would persist the active-color state while the reload failed,
 # leaving the on-disk state inconsistent with the live nginx (STATE-01/A). Because 'set -e'
 # is not triggered by an AND-OR list followed by another command, we handle it explicitly.

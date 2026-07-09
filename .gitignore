@@ -5,3 +5,6 @@ Thumbs.db
 *.lf.sh
 .idea/
 .vs/
+
+# Yerel test anahtarlari (remote sim)
+tests/.sim-keys/

@@ -179,9 +179,9 @@ flowchart TB
 | 6 | sağlıklıysa / on pass | **nginx switch**: upstream dosyası yeniden yazılır + graceful reload → sıfır kesintili geçiş / upstream rewritten + graceful reload → zero-downtime switch |
 | 7 | başarısızsa / on fail | Geçiş YAPILMAZ; canlı etkilenmez; job başarısız işaretlenir / Switch NOT made; live unaffected; job marked failed |
 
-**TR:** Tüm bu ağır iş, tek bir `pipeline.sh` scriptinin alt komutlarıyla yapılır: `backup`, `publish-source`, `deploy-artifacts`, `write-info`, `restart`, `health`, `rollback`. Hepsi `SERVICES`'i okuyup tüm servisler üzerinde döner.
+**TR:** Tüm bu ağır iş, tek bir `pipeline.sh` scriptinin alt komutlarıyla yapılır: `publish-source`, `deploy-artifacts`, `write-env`, `write-info`, `restart`, `health`, `health-active`, `switch`, `rollback`. Hepsi `SERVICES`'i okuyup tüm servisler üzerinde döner.
 
-**EN:** All this heavy lifting is done by subcommands of a single `pipeline.sh` script: `backup`, `publish-source`, `deploy-artifacts`, `write-info`, `restart`, `health`, `rollback`. Each reads `SERVICES` and iterates over all services.
+**EN:** All this heavy lifting is done by subcommands of a single `pipeline.sh` script: `publish-source`, `deploy-artifacts`, `write-env`, `write-info`, `restart`, `health`, `health-active`, `switch`, `rollback`. Each reads `SERVICES` and iterates over all services.
 
 ---
 
@@ -408,8 +408,9 @@ ssh-copy-id -i deploy_key.pub -p 22 deploy@10.0.0.5
 ```bash
 DEPLOY_TARGET=remote \
 SSH_HOST=10.0.0.5 SSH_USER=deploy SSH_PORT=22 \
+SSH_KNOWN_HOSTS="$(ssh-keyscan -p 22 10.0.0.5)" \
 SSH_PRIVATE_KEY="$(cat deploy_key)" \
-SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://10.0.0.5:5001" \
+SERVICES="web|src/Web/Web.csproj|/opt/myapp-web|myapp-web|http://10.0.0.5:5001/health" \
 bash scripts/setup-remote-host.sh
 ```
 
@@ -448,7 +449,7 @@ deploy ALL=(ALL) NOPASSWD: ALL
 | `Host key verification failed` | `StrictHostKeyChecking=yes` açık ve host `known_hosts`'ta yok. | `SSH_KNOWN_HOSTS` variable'ına host anahtarını koyun: `ssh-keyscan -p <port> <host>` çıktısını yapıştırın. |
 | `Permission denied (publickey)` | Public key sunucuda yok, yanlış kullanıcı veya izinler hatalı. | `deploy_key.pub`'ı `~<SSH_USER>/.ssh/authorized_keys`'e ekleyin; `SSH_USER` doğru olsun; `chmod 700 ~/.ssh`, `chmod 600 authorized_keys`. |
 | `Load key ... invalid format` / `error in libcrypto` | `SSH_PRIVATE_KEY` secret'ı eksik/bozuk yapıştırılmış. | Anahtarın **tümünü** (`-----BEGIN...` ve `-----END...` satırları dahil) yapıştırın. `ed25519` ve **şifresiz** (passphrase yok) key kullanın. |
-| `sudo: a password is required` / restart-backup adımı takılıyor | Deploy kullanıcısında şifresiz `sudo` yok. | Sunucuda sudoers (`visudo`): `deploy ALL=(ALL) NOPASSWD: ALL` (komutlar `sudo bash -c` ile çalıştığından dar whitelist yetmez). |
+| `sudo: a password is required` / restart adımı takılıyor | Deploy kullanıcısında şifresiz `sudo` yok. | Sunucuda sudoers (`visudo`): `deploy ALL=(ALL) NOPASSWD: ALL` (komutlar `sudo bash -c` ile çalıştığından dar whitelist yetmez). |
 | Health başarısız ama servis ayakta | `health_url` runner'dan erişilemiyor (`127.0.0.1` yazılmış) veya port firewall'da kapalı. | Remote'ta `health_url = http://<sunucu-ip>:port`; güvenlik grubunda/firewall'da o portu runner'a açın. |
 | `Connection timed out` | Port/firewall veya yanlış `SSH_HOST`/`SSH_PORT`. | Sunucuda 22 (veya `SSH_PORT`) portunu runner IP'sine açın; `SSH_HOST` ve `SSH_PORT` değerlerini doğrulayın. |
 | `rsync: command not found` | rsync runner'da **veya** sunucuda kurulu değil. | İki tarafta da kurun: `sudo apt-get install -y rsync`. |
@@ -463,9 +464,9 @@ ssh-keyscan -p 22 10.0.0.5
 # çıktının tamamını / the whole output ->  Variable: SSH_KNOWN_HOSTS
 ```
 
-**TR:** Bunu doldurmak hem "host key verification" hatasını hem de tekrarlı `ssh-keyscan` kaynaklı bağlantı sıfırlanmalarını önler. Boş bırakılırsa blueprint host'u ilk adımda bir kez tarar (`known_hosts`'a ekler) ve sonraki adımlarda tekrar taramaz.
+**TR:** Bunu doldurmak hem "host key verification" hatasını hem de tekrarlı `ssh-keyscan` kaynaklı bağlantı sıfırlanmalarını önler. **Boş bırakılırsa uzak deploy reddedilir** (MITM koruması — otomatik kabul fallback'i kaldırıldı).
 
-**EN:** Setting this avoids both the "host key verification" error and the connection resets caused by repeated `ssh-keyscan`. If left empty, the blueprint scans the host once on the first step (adds it to `known_hosts`) and does not re-scan on later steps.
+**EN:** Setting this avoids both the "host key verification" error and the connection resets caused by repeated `ssh-keyscan`. **If left empty, remote deploy is refused** (MITM protection — the auto-accept fallback was removed).
 
 ---
 
@@ -600,6 +601,8 @@ dotnet-cicd-template/
 │   ├── beginner-walkthrough.en.md  # complete beginners (EN)
 │   ├── company-setup.tr.md         # firma kurulum referansı (TR)
 │   ├── company-setup.en.md         # company setup reference (EN)
+│   ├── kendi-projene-entegrasyon.tr.md  # kendi .NET projene tam entegrasyon (TR)
+│   ├── own-project-integration.en.md    # full own-project integration (EN)
 │   ├── dotnet-cicd-template.tr.md  # Türkçe playbook
 │   └── dotnet-cicd-template.en.md  # English playbook
 └── templates/

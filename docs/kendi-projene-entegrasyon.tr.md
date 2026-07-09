@@ -583,6 +583,11 @@ Video yalnızca bu akışı gösterir.
 `previous_folder` en hızlısıdır: eski renk zaten ayakta olduğu için trafik anında geri döner.
 Rollback da `production` onayına tabidir.
 
+> **Önemli:** `previous_folder` yalnızca **diğer renkte daha önce başarılı bir deploy yapılmışsa** çalışır.
+> İlk deploy'dan hemen sonra (yalnızca bir renk doluysa) rollback hedefi bulunamaz ve işlem
+> hiçbir değişiklik yapmadan iptal olur — bu beklenen davranıştır. İkinci deploy'dan sonra
+> her iki renk de dolu olur ve anında rollback mümkün hale gelir.
+
 ---
 
 ## 15. Güvenlik modeli (bilmeniz gerekenler)

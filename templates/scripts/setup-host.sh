@@ -4,7 +4,7 @@
 # CI/CD Blueprint - one-time host setup (blue-green / Unix socket)
 #
 # Her servis icin olusturur / Creates per-service:
-#   - Iki systemd birimi (blue/green) — Unix socket uzerinde dinler
+#   - Iki systemd birimi (blue/green) — Unix socket uzerinde dinle
 #     Two systemd units (blue/green) — listening on Unix socket
 #   - nginx upstream include (varsayilan: blue) + public-port server blogu
 #     nginx upstream include (default: blue) + public-port server block
@@ -35,7 +35,7 @@ ASPNETCORE_ENV="${ASPNETCORE_ENV:-Production}"
 # nginx conf.d dizini (dist'e gore degisebilir)
 # nginx conf.d directory (may vary by distro)
 NGINX_CONFD="${NGINX_CONFD:-/etc/nginx/conf.d}"
-# blueprint upstream include dosyalari buraya yazilir; pipeline.sh bunu okur/yazar
+# blueprint upstream include dosyalari buraya yazilir; pipeline.sh bunu okur/yaza
 # blueprint upstream include files live here; pipeline.sh reads/writes this
 CICD_DIR="/etc/nginx/cicd"
 
@@ -116,7 +116,7 @@ printf '%s\n' "${SERVICES:?SERVICES ortam degiskeni tanimli degil / SERVICES env
         echo "  servis kullanicisi olusturuldu / service user created: $svc_user"
       fi
 
-      # Her renk icin systemd birimi / systemd unit for each color
+      # Her renk icin systemd birimi / systemd unit for each colo
       for color in blue green; do
         unit_name="${svc}-${color}"
         unit_dir="${dd}-${color}"
@@ -161,7 +161,7 @@ Environment=DOTNET_USE_POLLING_FILE_WATCHER=1
 # Note: svc_user has no home; to persist DataProtection keys define a KeyDir and
 # add ReadWritePaths (see the commented example below).
 # ReadWritePaths=${unit_dir}/keys
-# Gizli ortam degiskenleri — deploy'da yazilir; yoksa yok sayilir
+# Gizli ortam degiskenleri — deploy'da yazilir; yoksa yok sayili
 # Secret env vars — written at deploy; ignored if absent
 EnvironmentFile=-${unit_dir}/.env
 

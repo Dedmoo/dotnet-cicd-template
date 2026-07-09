@@ -125,6 +125,11 @@ jobs:
                 missing=1
               fi
             done
+            if [ -z "${SSH_KNOWN_HOSTS:-}" ]; then
+              echo "HATA / ERROR: remote deploy icin 'SSH_KNOWN_HOSTS' variable zorunlu (MITM korumasi)."
+              echo "  Uretmek icin / generate with: ssh-keyscan -p ${SSH_PORT} ${SSH_HOST}"
+              missing=1
+            fi
             if [ -z "${SSH_PRIVATE_KEY:-}" ]; then
               echo "HATA / ERROR: remote deploy icin 'SSH_PRIVATE_KEY' secret gerekli."
               missing=1
