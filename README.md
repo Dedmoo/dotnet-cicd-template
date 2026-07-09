@@ -10,6 +10,10 @@
 **TR — Tanıtım videosu:** [video/cicd-tanitim.mp4](./video/cicd-tanitim.mp4) (~11 MB)  
 **EN — Intro video:** [video/cicd-tanitim.mp4](./video/cicd-tanitim.mp4) (~11 MB)
 
+**TR — Kalan adımlar ve detaylar için dokümantasyon:** [Sıfırdan kurulum](./docs/beginner-walkthrough.tr.md) · [Projene entegrasyon](./docs/kendi-projene-entegrasyon.tr.md) · [Variables/Secrets tablosu](./docs/company-setup.tr.md) · [Ayrıntılı playbook](./docs/dotnet-cicd-template.tr.md) · [Tüm dokümanlar ↓](#dokümantasyon--documentation)
+
+**EN — For remaining setup steps and details, read the docs:** [Beginner walkthrough](./docs/beginner-walkthrough.en.md) · [Own-project integration](./docs/own-project-integration.en.md) · [Variables/Secrets reference](./docs/company-setup.en.md) · [Detailed playbook](./docs/dotnet-cicd-template.en.md) · [All documentation ↓](#dokümantasyon--documentation)
+
 ## Dokümantasyon / Documentation
 
 **TR:** Hiç bilmeyen / ilk kez kuran için (öğrenme yok — tıklaya tıklaya):
