@@ -157,9 +157,15 @@ jobs:
             echo "> The new release is written to the IDLE color. On health pass nginx makes it active via graceful reload."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # DUZENLE / EDIT (opsiyonel): veritabani/altyapi hazirligi
-      # - name: Altyapi hazir / ensure infra
-      #   run: bash scripts/ensure-infra.sh
+      # Opsiyonel: DB migration vb. — once scripts/ensure-infra.sh dosyasini duzenleyin,
+      # sonra Variable RUN_ENSURE_INFRA=true yapin. Siralama: migrate -> idle deploy -> health -> switch.
+      # Optional: DB migrations etc. — customize scripts/ensure-infra.sh first,
+      # then set Variable RUN_ENSURE_INFRA=true. Order: migrate -> idle deploy -> health -> switch.
+      - name: Altyapi hazir / ensure infra
+        if: vars.RUN_ENSURE_INFRA == 'true'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: bash scripts/ensure-infra.sh
 
       - name: Build + test (kaynaktan) / (from source)
         if: inputs.source == 'build_from_source'

@@ -1,8 +1,8 @@
 # CI/CD Pipeline Blueprint
 
-**TR:** Projeden bağımsız, kopyala-yapıştır bir CI/CD boru hattı şablonu. Kendinden barındırmalı (self-hosted) bir GitHub Actions çalıştırıcısı üzerinde; otomatik derleme/test, onaya bağlı üretim dağıtımı, **sıfır kesintili blue-green dağıtım**, sağlık kontrolü ve anında geri alma sağlar. Herhangi bir .NET projesine tek bir `SERVICES` bloğu doldurularak dakikalar içinde uyarlanır.
+**TR:** Projeden bağımsız, kopyala-yapıştır bir CI/CD boru hattı şablonu. Kendinden barındırmalı (self-hosted) bir GitHub Actions çalıştırıcısı üzerinde; otomatik derleme/test, onaya bağlı üretim dağıtımı, **sıfır kesintili blue-green dağıtım**, sağlık kontrolü, deploy öncesi geçiş engelleme (sağlık geçmezse trafik değişmez) ve onaylı anında geri alma sağlar. Herhangi bir .NET projesine tek bir `SERVICES` bloğu doldurularak dakikalar içinde uyarlanır.
 
-**EN:** A project-agnostic, copy-paste CI/CD pipeline template. On a self-hosted GitHub Actions runner it provides automatic build/test, approval-gated production deployment, **zero-downtime blue-green deploys**, health checks and instant rollback. It adapts to any .NET project in minutes by filling in a single `SERVICES` block.
+**EN:** A project-agnostic, copy-paste CI/CD pipeline template. On a self-hosted GitHub Actions runner it provides automatic build/test, approval-gated production deployment, **zero-downtime blue-green deploys**, health checks, pre-switch protection (traffic never moves if health fails) and approval-gated instant rollback. It adapts to any .NET project in minutes by filling in a single `SERVICES` block.
 
 **TR — İlk kez mi kuruyorsunuz?** Öğrenmeye gerek yok: [`docs/beginner-walkthrough.tr.md`](./docs/beginner-walkthrough.tr.md)  
 **EN — First time setup?** No theory needed: [`docs/beginner-walkthrough.en.md`](./docs/beginner-walkthrough.en.md)
@@ -315,6 +315,7 @@ note=ana sayfa metni güncellendi
 | Variable | `SSH_USER` | remote için / for remote | SSH kullanıcısı (ör. `deploy`) / SSH user (e.g. `deploy`) |
 | Variable | `SSH_PORT` | Hayır / No | SSH portu (varsayılan `22`) / SSH port (default `22`) |
 | Variable | `SSH_KNOWN_HOSTS` | remote için zorunlu / required for remote | Sunucu host key satırı (`ssh-keyscan` çıktısı). MITM korumasıdır; boş bırakılırsa uzak deploy reddedilir / server host key line. MITM protection; remote deploy is refused if empty |
+| Variable | `RUN_ENSURE_INFRA` | Hayır / No | `true` ise deploy öncesi `scripts/ensure-infra.sh` çalışır (DB migration vb.; önce scripti düzenleyin) / if `true`, runs `scripts/ensure-infra.sh` before deploy (DB migrations etc.; customize the script first) |
 | Variable | `ARTIFACT_NAME` | Hayır / No | Artifact adı (varsayılan `app-publish`) |
 | Secret | `SSH_PRIVATE_KEY` | remote için / for remote | Deploy SSH **private key** (şifresiz bağlantı) |
 | Secret | `APP_ENV` | Hayır / No | `KEY=VALUE`: bağlantı dizeleri, API anahtarları |
@@ -615,6 +616,7 @@ dotnet-cicd-template/
     │       └── production-rollback.yml        # previous_folder | specific_commit
     └── scripts/
         ├── pipeline.sh            # local + remote deploy/rollback
+        ├── ensure-infra.sh        # opsiyonel: deploy oncesi DB migration hook
         ├── ssh-remote.sh          # SSH key, rsync, remote commands
         ├── setup-remote-host.sh   # uzak sunucuda systemd kurulumu (SSH)
         ├── verify-health.sh

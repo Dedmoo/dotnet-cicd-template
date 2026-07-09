@@ -527,6 +527,31 @@ come up after the first successful deploy.
 
 ## 12. Step H — First CI and first Deploy
 
+### H.0 — Database migrations (DB-backed projects, optional)
+
+If your project uses a database, migrations should be part of the deploy flow. The template does
+not run them automatically; the hook is provided, you fill it in.
+
+**Correct order (blue-green):**
+
+1. **Migration** — backward-compatible schema change (while the active color still serves traffic)
+2. **Publish to idle** — new code is written to the idle directory
+3. **Restart + health** — is the idle socket healthy?
+4. **Switch** — nginx graceful reload
+
+> **Critical:** Non-backward-compatible (breaking) migrations do not fit blue-green directly.
+> Use expand-contract or plan a separate maintenance window.
+
+**Setup:**
+
+1. Open `scripts/ensure-infra.sh`.
+2. Edit `ensure_infra_local()` or `ensure_infra_remote()` with your migration command
+   (e.g. `dotnet ef database update --project ... --startup-project ...`).
+3. GitHub **Variables** → `RUN_ENSURE_INFRA` = `true`.
+4. Run deploy — the migration step runs **before** downloading the artifact.
+
+If `RUN_ENSURE_INFRA` is unset or not `true`, this step is skipped (default).
+
 ### H.1 — CI (automatic)
 
 Push a small change to `main`. Wait for **Actions → Continuous Integration** to go **green**. CI
@@ -652,6 +677,7 @@ sudo journalctl -u myapp-web-blue -n 50 --no-pager      # app log
 - [ ] `production` environment: required reviewers + prevent self-review + `main` only
 - [ ] **Continuous Integration** green at least once
 - [ ] **Production Deploy** triggered with a description and approved
+- [ ] (if DB) `ensure-infra.sh` customized, `RUN_ENSURE_INFRA=true`
 
 **remote extra:**
 - [ ] `deploy` user + `authorized_keys` on the server

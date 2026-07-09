@@ -527,6 +527,31 @@ başarılı deploy'dan sonra ayağa kalkar.
 
 ## 12. Adım H — İlk CI ve ilk Deploy
 
+### H.0 — Veritabanı migration (DB kullanan projeler, opsiyonel)
+
+Veritabanı kullanan projelerde migration **deploy akışının parçası olmalıdır**. Şablon bunu
+otomatik yapmaz; hook hazırdır, siz doldurursunuz.
+
+**Doğru sıra (blue-green):**
+
+1. **Migration** — geriye uyumlu şema değişikliği (aktif renk hâlâ çalışırken)
+2. **Idle renge yayın** — yeni kod idle dizine yazılır
+3. **Restart + health** — idle socket sağlıklı mı?
+4. **Switch** — nginx graceful reload
+
+> **Kritik:** Geriye uyumlu olmayan (breaking) migration'lar blue-green ile doğrudan çalışmaz.
+> Expand-contract deseni kullanın veya ayrı bakım penceresi planlayın.
+
+**Kurulum:**
+
+1. `scripts/ensure-infra.sh` dosyasını açın.
+2. `ensure_infra_local()` veya `ensure_infra_remote()` içine projenize özel migration komutunu yazın
+   (ör. `dotnet ef database update --project ... --startup-project ...`).
+3. GitHub **Variables** → `RUN_ENSURE_INFRA` = `true`.
+4. Deploy çalıştırın — migration adımı artifact indirmeden **önce** koşar.
+
+`RUN_ENSURE_INFRA` tanımlı değilse veya `true` değilse bu adım atlanır (varsayılan).
+
 ### H.1 — CI (otomatik)
 
 `main` dalına küçük bir değişiklik push edin. **Actions → Continuous Integration**'ın
@@ -651,6 +676,7 @@ sudo journalctl -u myapp-web-blue -n 50 --no-pager      # uygulama logu
 - [ ] `production` environment: required reviewers + prevent self-review + yalnızca `main`
 - [ ] En az bir kez **Continuous Integration** yeşil
 - [ ] **Production Deploy** açıklama ile tetiklendi ve onaylandı
+- [ ] (DB varsa) `ensure-infra.sh` düzenlendi, `RUN_ENSURE_INFRA=true`
 
 **remote ek:**
 - [ ] Sunucuda `deploy` kullanıcısı + `authorized_keys`
